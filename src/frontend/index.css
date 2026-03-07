@@ -1,0 +1,348 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   ARCADE FONT FACES
+   ============================================ */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/assets/fonts/JetBrainsMono[wght].woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/assets/fonts/GeistMono[wght].woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Outfit";
+  src: url("/assets/fonts/Outfit[wght].woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================
+   ARCADE DARK THEME TOKENS (OKLCH)
+   ============================================ */
+
+@layer base {
+  :root {
+    --radius: 0.375rem;
+
+    /* ── Dark Arcade Palette ── */
+    /* background: near-black navy */
+    --background: 0.09 0.02 270;
+    /* foreground: bright white-blue */
+    --foreground: 0.95 0.01 270;
+
+    /* card: deep navy panel */
+    --card: 0.12 0.025 265;
+    --card-foreground: 0.95 0.01 270;
+
+    /* popover */
+    --popover: 0.14 0.028 265;
+    --popover-foreground: 0.95 0.01 270;
+
+    /* primary: electric yellow (Pacman yellow) */
+    --primary: 0.88 0.18 90;
+    --primary-foreground: 0.08 0.02 270;
+
+    /* secondary: electric blue */
+    --secondary: 0.55 0.22 255;
+    --secondary-foreground: 0.98 0 0;
+
+    /* muted: dark navy muted */
+    --muted: 0.15 0.022 265;
+    --muted-foreground: 0.55 0.04 265;
+
+    /* accent: neon cyan */
+    --accent: 0.75 0.18 195;
+    --accent-foreground: 0.08 0.02 270;
+
+    /* destructive: arcade red */
+    --destructive: 0.65 0.25 25;
+    --destructive-foreground: 0.98 0 0;
+
+    /* borders */
+    --border: 0.22 0.04 265;
+    --input: 0.18 0.03 265;
+    --ring: 0.88 0.18 90;
+
+    /* chart colors */
+    --chart-1: 0.88 0.18 90;
+    --chart-2: 0.55 0.22 255;
+    --chart-3: 0.75 0.18 195;
+    --chart-4: 0.75 0.2 330;
+    --chart-5: 0.65 0.25 25;
+
+    /* sidebar */
+    --sidebar: 0.11 0.022 265;
+    --sidebar-foreground: 0.95 0.01 270;
+    --sidebar-primary: 0.88 0.18 90;
+    --sidebar-primary-foreground: 0.08 0.02 270;
+    --sidebar-accent: 0.55 0.22 255;
+    --sidebar-accent-foreground: 0.98 0 0;
+    --sidebar-border: 0.22 0.04 265;
+    --sidebar-ring: 0.88 0.18 90;
+
+    /* custom arcade tokens */
+    --pac-yellow: 0.88 0.2 90;
+    --pac-blue: 0.55 0.22 255;
+    --pac-cyan: 0.75 0.18 195;
+    --pac-pink: 0.75 0.2 330;
+    --pac-orange: 0.75 0.2 60;
+    --pac-red: 0.65 0.25 25;
+    --pac-gold: 0.82 0.19 85;
+    --pac-dark: 0.09 0.02 270;
+    --pac-navy: 0.12 0.025 265;
+  }
+
+  /* Force dark mode - this is a dark-only arcade app */
+  html {
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Outfit", "JetBrains Mono", monospace;
+    background-color: oklch(var(--background));
+  }
+}
+
+/* ============================================
+   ARCADE ANIMATIONS
+   ============================================ */
+
+@keyframes pacman-chomp {
+  0%, 100% { clip-path: polygon(100% 50%, 0% 0%, 0% 100%); }
+  50%       { clip-path: polygon(100% 50%, 35% 35%, 35% 65%); }
+}
+
+@keyframes ghost-float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-4px); }
+}
+
+@keyframes jackpot-pulse {
+  0%, 100% {
+    text-shadow:
+      0 0 8px oklch(var(--pac-gold)),
+      0 0 20px oklch(var(--pac-gold) / 0.6);
+  }
+  50% {
+    text-shadow:
+      0 0 15px oklch(var(--pac-gold)),
+      0 0 40px oklch(var(--pac-gold) / 0.8),
+      0 0 60px oklch(var(--pac-gold) / 0.4);
+  }
+}
+
+@keyframes neon-flicker {
+  0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
+    opacity: 1;
+  }
+  20%, 24%, 55% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes pixel-fade-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.95);
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes countdown-pulse {
+  0%, 100% { color: oklch(var(--pac-yellow)); }
+  50% { color: oklch(var(--pac-gold)); }
+}
+
+@keyframes live-glow {
+  0%, 100% {
+    color: oklch(var(--pac-gold));
+    text-shadow: 0 0 10px oklch(var(--pac-gold) / 0.8);
+  }
+  50% {
+    color: oklch(0.95 0.22 90);
+    text-shadow: 0 0 20px oklch(var(--pac-gold)), 0 0 40px oklch(var(--pac-gold) / 0.5);
+  }
+}
+
+@keyframes pellet-twinkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.6; transform: scale(1.3); }
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+.font-arcade {
+  font-family: "JetBrains Mono", "Geist Mono", "Courier New", monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.font-display {
+  font-family: "Outfit", sans-serif;
+}
+
+.text-pac-yellow {
+  color: oklch(var(--pac-yellow));
+}
+
+.text-pac-blue {
+  color: oklch(var(--pac-blue));
+}
+
+.text-pac-cyan {
+  color: oklch(var(--pac-cyan));
+}
+
+.text-pac-pink {
+  color: oklch(var(--pac-pink));
+}
+
+.text-pac-orange {
+  color: oklch(var(--pac-orange));
+}
+
+.text-pac-red {
+  color: oklch(var(--pac-red));
+}
+
+.text-pac-gold {
+  color: oklch(var(--pac-gold));
+}
+
+.bg-pac-dark {
+  background-color: oklch(var(--pac-dark));
+}
+
+.bg-pac-navy {
+  background-color: oklch(var(--pac-navy));
+}
+
+.border-pac-yellow {
+  border-color: oklch(var(--pac-yellow));
+}
+
+.border-pac-blue {
+  border-color: oklch(var(--pac-blue));
+}
+
+.glow-yellow {
+  box-shadow:
+    0 0 8px oklch(var(--pac-yellow) / 0.5),
+    0 0 20px oklch(var(--pac-yellow) / 0.2);
+}
+
+.glow-blue {
+  box-shadow:
+    0 0 8px oklch(var(--pac-blue) / 0.5),
+    0 0 20px oklch(var(--pac-blue) / 0.2);
+}
+
+.glow-gold {
+  box-shadow:
+    0 0 12px oklch(var(--pac-gold) / 0.6),
+    0 0 30px oklch(var(--pac-gold) / 0.3);
+}
+
+.jackpot-glow {
+  animation: jackpot-pulse 2s ease-in-out infinite;
+}
+
+.live-glow {
+  animation: live-glow 1.2s ease-in-out infinite;
+}
+
+.countdown-animate {
+  animation: countdown-pulse 1s ease-in-out infinite;
+}
+
+.neon-text {
+  text-shadow:
+    0 0 7px oklch(var(--pac-yellow) / 0.8),
+    0 0 15px oklch(var(--pac-yellow) / 0.5);
+}
+
+.arcade-border {
+  border: 2px solid oklch(var(--pac-blue));
+  box-shadow:
+    0 0 8px oklch(var(--pac-blue) / 0.4),
+    inset 0 0 8px oklch(var(--pac-blue) / 0.1);
+}
+
+.arcade-border-yellow {
+  border: 2px solid oklch(var(--pac-yellow));
+  box-shadow:
+    0 0 8px oklch(var(--pac-yellow) / 0.4),
+    inset 0 0 8px oklch(var(--pac-yellow) / 0.1);
+}
+
+.pixel-fade-in {
+  animation: pixel-fade-in 0.4s ease-out forwards;
+}
+
+/* Scanline overlay effect */
+.scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    oklch(0 0 0 / 0.04) 2px,
+    oklch(0 0 0 / 0.04) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Ghost colors */
+.ghost-blinky { color: oklch(0.65 0.25 25); }
+.ghost-pinky  { color: oklch(0.75 0.18 340); }
+.ghost-inky   { color: oklch(0.72 0.18 195); }
+.ghost-clyde  { color: oklch(0.75 0.2 60); }
+
+/* Mobile game controls */
+.dpad-btn {
+  @apply flex items-center justify-center rounded-lg text-foreground transition-all active:scale-90;
+  background-color: oklch(var(--pac-navy));
+  border: 2px solid oklch(var(--pac-blue) / 0.5);
+  width: 56px;
+  height: 56px;
+  font-size: 1.4rem;
+}
+
+.dpad-btn:active {
+  background-color: oklch(var(--pac-blue) / 0.3);
+  border-color: oklch(var(--pac-blue));
+}
