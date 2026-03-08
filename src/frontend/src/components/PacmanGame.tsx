@@ -134,13 +134,13 @@ function ghostPassableInHouse(
 function initGhosts(_level: number): Ghost[] {
   return [
     {
-      pos: { x: HOUSE_EXIT_COL, y: HOUSE_EXIT_ROW - 1 }, // Blinky starts just above door
-      dir: DIRS.left,
+      pos: { x: HOUSE_EXIT_COL, y: HOUSE_ROW_MIN }, // Blinky starts at top of house interior
+      dir: DIRS.up,
       color: "#FF0000",
-      mode: "scatter",
+      mode: "house",
       frightenTimer: 0,
       scatterTarget: { tx: 17, ty: 0 },
-      releaseTimer: 0, // immediately out
+      releaseTimer: 0, // exits immediately
     },
     {
       pos: { x: 9, y: 10 }, // Pinky inside house center
@@ -193,7 +193,7 @@ function createInitialState(level = 1): GameState {
   };
 }
 
-// Is pos within `threshold` tiles of its nearest tile center?
+// Is pos within threshold tiles of its nearest tile center?
 function isTileAligned(pos: Pos, threshold = 0.15): boolean {
   return (
     Math.abs(pos.x - Math.round(pos.x)) < threshold &&
@@ -591,11 +591,21 @@ export default function PacmanGame({
         const row = Math.round(ghost.pos.y);
         const nd = ghost.dir.y !== 0 ? ghost.dir : DIRS.up;
 
-        // Bounce within the house rows
-        if (ghostPassableInHouse(state.maze, col, row + nd.y)) {
-          ghost.pos = { x: ghost.pos.x, y: ghost.pos.y + nd.y * step };
+        // Bounce within the house rows -- clamp strictly to house bounds
+        const nextY = ghost.pos.y + nd.y * step;
+        if (
+          nextY >= HOUSE_ROW_MIN &&
+          nextY <= HOUSE_ROW_MAX &&
+          ghostPassableInHouse(state.maze, col, row + nd.y)
+        ) {
+          ghost.pos = { x: ghost.pos.x, y: nextY };
         } else {
+          // Hit a boundary: reverse and clamp
           ghost.dir = { x: 0, y: -nd.y };
+          ghost.pos.y = Math.max(
+            HOUSE_ROW_MIN,
+            Math.min(HOUSE_ROW_MAX, ghost.pos.y),
+          );
         }
 
         if (ghost.releaseTimer <= 0) {
@@ -777,6 +787,9 @@ export default function PacmanGame({
         // Tunnel wrap
         if (state.pacPos.x < -0.5) state.pacPos.x = COLS - 0.5;
         if (state.pacPos.x > COLS - 0.5) state.pacPos.x = -0.5;
+      } else {
+        // Can't move in current direction -- snap to nearest tile center to prevent mid-tile stall
+        state.pacPos = snapToTile(state.pacPos);
       }
 
       // ── Pacman mouth animation ──
