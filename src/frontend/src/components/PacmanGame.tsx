@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ── Maze Layout ──────────────────────────────────────────
-// 0=empty  1=wall  2=pellet  3=power-pellet  4=ghost-house
+// 0=open  1=wall  2=pellet  3=power-pellet  4=ghost-house-interior
 const MAZE_TEMPLATE: number[][] = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1],
@@ -27,14 +27,18 @@ const MAZE_TEMPLATE: number[][] = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
+const ROWS = MAZE_TEMPLATE.length;
 const COLS = 19;
 const TILE = 28;
 const HUD_HEIGHT = TILE;
 const CANVAS_W = COLS * TILE;
-const CANVAS_H = MAZE_TEMPLATE.length * TILE + HUD_HEIGHT;
+const CANVAS_H = ROWS * TILE + HUD_HEIGHT;
 
-const PACMAN_SPEED = 1.8;
-const POWER_DURATION = 300; // frames
+// Pacman speed: tiles per second
+const PAC_SPEED = 7.5;
+// Ghost speed: tiles per second
+const GHOST_SPEED = 5.5;
+const POWER_DURATION = 8; // seconds
 
 type Dir = { x: number; y: number };
 const DIRS: Record<string, Dir> = {
@@ -44,23 +48,28 @@ const DIRS: Record<string, Dir> = {
   right: { x: 1, y: 0 },
   none: { x: 0, y: 0 },
 };
+const DIR_LIST = [DIRS.up, DIRS.down, DIRS.left, DIRS.right];
 
-interface Ghost {
+// Tile coordinate position (float, in tile units)
+interface Pos {
   x: number;
   y: number;
+}
+
+interface Ghost {
+  pos: Pos; // tile-unit position (center of current tile + sub-tile offset)
   dir: Dir;
+  nextDir: Dir;
   color: string;
   mode: "chase" | "scatter" | "frightened" | "eaten";
   frightenTimer: number;
   scatterTarget: { tx: number; ty: number };
-  speed: number;
-  moveTimer: number;
+  releaseTimer: number; // seconds before this ghost leaves the house
 }
 
 interface GameState {
   maze: number[][];
-  pacX: number;
-  pacY: number;
+  pacPos: Pos; // tile-unit position
   pacDir: Dir;
   pacNextDir: Dir;
   pacMouthAngle: number;
@@ -73,7 +82,7 @@ interface GameState {
   powerActive: boolean;
   powerTimer: number;
   gameStatus: "playing" | "dying" | "levelclear" | "gameover";
-  deathTimer: number;
+  statusTimer: number; // seconds remaining in dying/levelclear states
 }
 
 function deepCopyMaze(template: number[][]): number[][] {
@@ -81,61 +90,73 @@ function deepCopyMaze(template: number[][]): number[][] {
 }
 
 function countPellets(maze: number[][]): number {
-  let count = 0;
-  for (const row of maze) {
-    for (const cell of row) {
-      if (cell === 2 || cell === 3) count++;
-    }
-  }
-  return count;
+  let n = 0;
+  for (const row of maze) for (const c of row) if (c === 2 || c === 3) n++;
+  return n;
+}
+
+function tileAt(maze: number[][], col: number, row: number): number {
+  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return 0;
+  return maze[row][col];
+}
+
+// Pacman can walk through anything except walls (1)
+function pacPassable(maze: number[][], col: number, row: number): boolean {
+  const t = tileAt(maze, col, row);
+  return t !== 1;
+}
+
+// Ghosts can walk through open tiles, pellet tiles, and ghost-house interior
+// but NOT walls (1) and NOT the ghost-house *door* row unless leaving
+function ghostPassable(maze: number[][], col: number, row: number): boolean {
+  const t = tileAt(maze, col, row);
+  return t !== 1;
 }
 
 function initGhosts(level: number): Ghost[] {
-  const baseSpeed = Math.min(1.2 + level * 0.1, 2.2);
+  const speed = Math.min(GHOST_SPEED + (level - 1) * 0.3, 9);
+  void speed;
+  // All ghosts start just outside the house at the corridor, staggered by releaseTimer
   return [
     {
-      x: 7 * TILE,
-      y: 9 * TILE,
+      pos: { x: 9, y: 8 }, // Blinky starts outside immediately
       dir: DIRS.left,
+      nextDir: DIRS.left,
       color: "#FF0000",
       mode: "chase",
       frightenTimer: 0,
-      scatterTarget: { tx: 16, ty: 0 },
-      speed: baseSpeed,
-      moveTimer: 0,
+      scatterTarget: { tx: 17, ty: 0 },
+      releaseTimer: 0,
     },
     {
-      x: 8 * TILE,
-      y: 9 * TILE,
+      pos: { x: 9, y: 10 }, // Pinky inside house
       dir: DIRS.up,
+      nextDir: DIRS.up,
       color: "#FFB8FF",
       mode: "scatter",
       frightenTimer: 0,
-      scatterTarget: { tx: 2, ty: 0 },
-      speed: baseSpeed,
-      moveTimer: 30,
+      scatterTarget: { tx: 1, ty: 0 },
+      releaseTimer: 4,
     },
     {
-      x: 9 * TILE,
-      y: 9 * TILE,
-      dir: DIRS.up,
+      pos: { x: 8, y: 10 }, // Inky inside house
+      dir: DIRS.down,
+      nextDir: DIRS.down,
       color: "#00FFFF",
       mode: "scatter",
       frightenTimer: 0,
-      scatterTarget: { tx: 16, ty: 21 },
-      speed: baseSpeed,
-      moveTimer: 60,
+      scatterTarget: { tx: 17, ty: 21 },
+      releaseTimer: 8,
     },
     {
-      x: 10 * TILE,
-      y: 9 * TILE,
-      dir: DIRS.right,
+      pos: { x: 10, y: 10 }, // Clyde inside house
+      dir: DIRS.up,
+      nextDir: DIRS.up,
       color: "#FFB847",
       mode: "scatter",
       frightenTimer: 0,
-      scatterTarget: { tx: 2, ty: 21 },
-      speed: baseSpeed,
-      moveTimer: 90,
+      scatterTarget: { tx: 1, ty: 21 },
+      releaseTimer: 12,
     },
   ];
 }
@@ -144,8 +165,7 @@ function createInitialState(level = 1): GameState {
   const maze = deepCopyMaze(MAZE_TEMPLATE);
   return {
     maze,
-    pacX: 9 * TILE,
-    pacY: 16 * TILE,
+    pacPos: { x: 9, y: 16 },
     pacDir: DIRS.none,
     pacNextDir: DIRS.left,
     pacMouthAngle: 0.25,
@@ -158,82 +178,98 @@ function createInitialState(level = 1): GameState {
     powerActive: false,
     powerTimer: 0,
     gameStatus: "playing",
-    deathTimer: 0,
+    statusTimer: 0,
   };
 }
 
-function tileAt(maze: number[][], col: number, row: number): number {
-  if (row < 0 || row >= maze.length) return 0;
-  if (col < 0 || col >= COLS) return 0;
-  return maze[row][col];
-}
-
-function isPassable(maze: number[][], col: number, row: number): boolean {
-  return tileAt(maze, col, row) !== 1;
-}
-
-function canMoveDir(
-  maze: number[][],
-  px: number,
-  py: number,
-  dir: Dir,
-): boolean {
-  if (dir.x === 0 && dir.y === 0) return false;
-  const nx = px + dir.x * 2;
-  const ny = py + dir.y * 2;
-  const col = Math.round(nx / TILE);
-  const row = Math.round(ny / TILE);
-  return isPassable(maze, col, row);
-}
-
-function snapToGrid(val: number): number {
-  return Math.round(val / TILE) * TILE;
-}
-
-function isGridAligned(px: number, py: number, threshold = 4): boolean {
+// Tile-aligned means the fractional part of position is near 0
+function isTileAligned(pos: Pos, threshold = 0.2): boolean {
   return (
-    Math.abs(px - snapToGrid(px)) < threshold &&
-    Math.abs(py - snapToGrid(py)) < threshold
+    Math.abs(pos.x - Math.round(pos.x)) < threshold &&
+    Math.abs(pos.y - Math.round(pos.y)) < threshold
   );
 }
 
-function getGhostChaseTarget(state: GameState): { tx: number; ty: number } {
-  return {
-    tx: Math.round(state.pacX / TILE),
-    ty: Math.round(state.pacY / TILE),
-  };
+function snapPos(pos: Pos): Pos {
+  return { x: Math.round(pos.x), y: Math.round(pos.y) };
 }
 
+function canMove(
+  maze: number[][],
+  pos: Pos,
+  dir: Dir,
+  isGhost = false,
+): boolean {
+  if (dir.x === 0 && dir.y === 0) return false;
+  const col = Math.round(pos.x) + dir.x;
+  const row = Math.round(pos.y) + dir.y;
+  return isGhost ? ghostPassable(maze, col, row) : pacPassable(maze, col, row);
+}
+
+// Ghost AI: pick best direction at a junction
 function pickGhostDir(ghost: Ghost, state: GameState): Dir {
+  const col = Math.round(ghost.pos.x);
+  const row = Math.round(ghost.pos.y);
+
+  // While still in the release timer, just bounce up/down inside house
+  if (ghost.releaseTimer > 0) {
+    // Try to keep moving up/down
+    const preferred = ghost.dir.y !== 0 ? ghost.dir : DIRS.up;
+    if (ghostPassable(state.maze, col + preferred.x, row + preferred.y))
+      return preferred;
+    const flip = { x: -preferred.x, y: -preferred.y };
+    if (ghostPassable(state.maze, col + flip.x, row + flip.y)) return flip;
+    return DIRS.none;
+  }
+
+  // Exiting house: navigate toward col=9, row=8 (the door)
+  if (row >= 8 && row <= 12 && col >= 6 && col <= 12) {
+    // Inside house area: move toward exit at (9, 8)
+    if (col !== 9) {
+      const dx = col < 9 ? DIRS.right : DIRS.left;
+      if (ghostPassable(state.maze, col + dx.x, row + dx.y)) return dx;
+    }
+    if (row > 8) {
+      if (ghostPassable(state.maze, col, row - 1)) return DIRS.up;
+    }
+  }
+
   const target =
     ghost.mode === "scatter"
       ? ghost.scatterTarget
       : ghost.mode === "frightened"
         ? {
             tx: Math.floor(Math.random() * COLS),
-            ty: Math.floor(Math.random() * 22),
+            ty: Math.floor(Math.random() * ROWS),
           }
-        : getGhostChaseTarget(state);
+        : { tx: Math.round(state.pacPos.x), ty: Math.round(state.pacPos.y) };
 
-  const col = Math.round(ghost.x / TILE);
-  const row = Math.round(ghost.y / TILE);
   const reverse = { x: -ghost.dir.x, y: -ghost.dir.y };
 
-  let bestDir = ghost.dir;
+  let bestDir: Dir = DIRS.none;
   let bestDist = Number.POSITIVE_INFINITY;
 
-  for (const d of [DIRS.up, DIRS.down, DIRS.left, DIRS.right]) {
+  for (const d of DIR_LIST) {
+    // No reversing (unless it's the only option)
     if (d.x === reverse.x && d.y === reverse.y) continue;
     const nc = col + d.x;
     const nr = row + d.y;
-    if (!isPassable(state.maze, nc, nr)) continue;
+    if (!ghostPassable(state.maze, nc, nr)) continue;
     const dist = (nc - target.tx) ** 2 + (nr - target.ty) ** 2;
     if (dist < bestDist) {
       bestDist = dist;
       bestDir = d;
     }
   }
-  return bestDir;
+
+  // If completely stuck (reverse only option), allow reverse
+  if (bestDir === DIRS.none) {
+    if (ghostPassable(state.maze, col + reverse.x, col + reverse.y)) {
+      return reverse;
+    }
+  }
+
+  return bestDir.x !== undefined ? bestDir : ghost.dir;
 }
 
 export interface PacmanGameProps {
@@ -258,73 +294,90 @@ export default function PacmanGame({
   const [gameStatus, setGameStatus] =
     useState<GameState["gameStatus"]>("playing");
 
-  const resetAfterDeath = useCallback((state: GameState) => {
-    state.pacX = 9 * TILE;
-    state.pacY = 16 * TILE;
-    state.pacDir = DIRS.none;
-    state.pacNextDir = DIRS.left;
-    state.ghosts = initGhosts(state.level);
-    state.powerActive = false;
-    state.powerTimer = 0;
-  }, []);
+  const onScoreUpdateRef = useRef(onScoreUpdate);
+  const onGameOverRef = useRef(onGameOver);
+  const onLivesUpdateRef = useRef(onLivesUpdate);
+  useEffect(() => {
+    onScoreUpdateRef.current = onScoreUpdate;
+  }, [onScoreUpdate]);
+  useEffect(() => {
+    onGameOverRef.current = onGameOver;
+  }, [onGameOver]);
+  useEffect(() => {
+    onLivesUpdateRef.current = onLivesUpdate;
+  }, [onLivesUpdate]);
 
-  // ── Drawing helpers ──────────────────────────────────
-  const drawMaze = useCallback(
-    (ctx: CanvasRenderingContext2D, maze: number[][], frame: number) => {
-      for (let row = 0; row < maze.length; row++) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally empty deps -- game loop runs once and uses refs
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+    if (!ctx) return;
+
+    stateRef.current = createInitialState(initialLevel);
+    frameRef.current = 0;
+    lastTimeRef.current = 0;
+
+    // ── Draw helpers ──────────────────────────────────
+    function toPixel(tileCoord: number): number {
+      return tileCoord * TILE;
+    }
+
+    function drawMaze(
+      c: CanvasRenderingContext2D,
+      maze: number[][],
+      frame: number,
+    ) {
+      for (let row = 0; row < ROWS; row++) {
         for (let col = 0; col < COLS; col++) {
           const cell = maze[row][col];
-          const x = col * TILE;
-          const y = row * TILE;
+          const px = col * TILE;
+          const py = row * TILE;
 
           if (cell === 1) {
-            ctx.fillStyle = "#0a0a2e";
-            ctx.fillRect(x, y, TILE, TILE);
-            ctx.strokeStyle = "#1a1a6e";
-            ctx.lineWidth = 1;
-            ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+            c.fillStyle = "#0a0a2e";
+            c.fillRect(px, py, TILE, TILE);
+            c.strokeStyle = "#1a3a8e";
+            c.lineWidth = 1.5;
+            c.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
           } else {
-            ctx.fillStyle = "#050510";
-            ctx.fillRect(x, y, TILE, TILE);
+            c.fillStyle = "#050510";
+            c.fillRect(px, py, TILE, TILE);
           }
 
           if (cell === 2) {
-            ctx.beginPath();
-            ctx.arc(x + TILE / 2, y + TILE / 2, 2.5, 0, Math.PI * 2);
-            ctx.fillStyle = "#ffeebb";
-            ctx.fill();
+            c.beginPath();
+            c.arc(px + TILE / 2, py + TILE / 2, 2.5, 0, Math.PI * 2);
+            c.fillStyle = "#ffeebb";
+            c.fill();
           } else if (cell === 3) {
-            const pulse = 3.5 + Math.sin(frame * 0.1) * 1.5;
-            ctx.beginPath();
-            ctx.arc(x + TILE / 2, y + TILE / 2, pulse, 0, Math.PI * 2);
-            const grd = ctx.createRadialGradient(
-              x + TILE / 2,
-              y + TILE / 2,
+            const pulse = 4 + Math.sin(frame * 0.12) * 1.5;
+            c.beginPath();
+            c.arc(px + TILE / 2, py + TILE / 2, pulse, 0, Math.PI * 2);
+            const grd = c.createRadialGradient(
+              px + TILE / 2,
+              py + TILE / 2,
               0,
-              x + TILE / 2,
-              y + TILE / 2,
+              px + TILE / 2,
+              py + TILE / 2,
               pulse,
             );
             grd.addColorStop(0, "#ffffff");
-            grd.addColorStop(0.6, "#ffffaa");
+            grd.addColorStop(0.5, "#ffffaa");
             grd.addColorStop(1, "transparent");
-            ctx.fillStyle = grd;
-            ctx.fill();
+            c.fillStyle = grd;
+            c.fill();
           }
         }
       }
-    },
-    [],
-  );
+    }
 
-  const drawPacman = useCallback(
-    (ctx: CanvasRenderingContext2D, state: GameState) => {
-      const { pacX, pacY, pacDir, pacMouthAngle } = state;
-      const cx = pacX + TILE / 2;
-      const cy = pacY + TILE / 2;
+    function drawPacman(c: CanvasRenderingContext2D, state: GameState) {
+      const { pacPos, pacDir, pacMouthAngle } = state;
+      const cx = toPixel(pacPos.x) + TILE / 2;
+      const cy = toPixel(pacPos.y) + TILE / 2;
       const r = TILE / 2 - 2;
-      const startAngle = pacMouthAngle * Math.PI;
-      const endAngle = (2 - pacMouthAngle) * Math.PI;
+      const mouth = pacMouthAngle * Math.PI;
 
       let rotation = 0;
       if (pacDir.x === 1) rotation = 0;
@@ -332,201 +385,189 @@ export default function PacmanGame({
       else if (pacDir.y === -1) rotation = -Math.PI / 2;
       else if (pacDir.y === 1) rotation = Math.PI / 2;
 
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(rotation);
-      ctx.shadowColor = "#ffd700";
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, r, startAngle, endAngle);
-      ctx.closePath();
-      const grd = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      c.save();
+      c.translate(cx, cy);
+      c.rotate(rotation);
+      c.shadowColor = "#ffd700";
+      c.shadowBlur = 10;
+      c.beginPath();
+      c.moveTo(0, 0);
+      c.arc(0, 0, r, mouth, 2 * Math.PI - mouth);
+      c.closePath();
+      const grd = c.createRadialGradient(0, 0, 0, 0, 0, r);
       grd.addColorStop(0, "#fff176");
       grd.addColorStop(0.7, "#ffd700");
       grd.addColorStop(1, "#e6ac00");
-      ctx.fillStyle = grd;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.restore();
-    },
-    [],
-  );
+      c.fillStyle = grd;
+      c.fill();
+      c.shadowBlur = 0;
+      c.restore();
+    }
 
-  const drawGhostEyes = useCallback(
-    (ctx: CanvasRenderingContext2D, ghost: Ghost) => {
-      const cx = ghost.x + TILE / 2;
-      const y = ghost.y + 2;
-      const h = TILE - 4;
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.ellipse(cx - 5, y + h / 3, 4, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(cx + 5, y + h / 3, 4, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#0000cc";
-      ctx.beginPath();
-      ctx.ellipse(
+    function drawGhostEyes(c: CanvasRenderingContext2D, ghost: Ghost) {
+      const cx = toPixel(ghost.pos.x) + TILE / 2;
+      const cy = toPixel(ghost.pos.y) + TILE / 2 - 2;
+      c.fillStyle = "#ffffff";
+      c.beginPath();
+      c.ellipse(cx - 5, cy, 4, 5, 0, 0, Math.PI * 2);
+      c.fill();
+      c.beginPath();
+      c.ellipse(cx + 5, cy, 4, 5, 0, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = "#0000cc";
+      c.beginPath();
+      c.ellipse(
         cx - 5 + ghost.dir.x * 2,
-        y + h / 3 + ghost.dir.y * 2,
+        cy + ghost.dir.y * 2,
         2.5,
         3,
         0,
         0,
         Math.PI * 2,
       );
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(
+      c.fill();
+      c.beginPath();
+      c.ellipse(
         cx + 5 + ghost.dir.x * 2,
-        y + h / 3 + ghost.dir.y * 2,
+        cy + ghost.dir.y * 2,
         2.5,
         3,
         0,
         0,
         Math.PI * 2,
       );
-      ctx.fill();
-    },
-    [],
-  );
+      c.fill();
+    }
 
-  const drawGhost = useCallback(
-    (ctx: CanvasRenderingContext2D, ghost: Ghost) => {
+    function drawGhost(c: CanvasRenderingContext2D, ghost: Ghost) {
       if (ghost.mode === "eaten") {
-        drawGhostEyes(ctx, ghost);
+        drawGhostEyes(c, ghost);
         return;
       }
 
-      const x = ghost.x + 2;
-      const y = ghost.y + 2;
+      const px = toPixel(ghost.pos.x);
+      const py = toPixel(ghost.pos.y);
+      const x = px + 2;
+      const y = py + 2;
       const w = TILE - 4;
       const h = TILE - 4;
-      const cx = ghost.x + TILE / 2;
+      const cx = px + TILE / 2;
 
       let color = ghost.color;
       if (ghost.mode === "frightened") {
         const flashing =
-          ghost.frightenTimer < 120 &&
-          Math.floor(ghost.frightenTimer / 15) % 2 === 0;
+          ghost.frightenTimer < 3 &&
+          Math.floor(ghost.frightenTimer * 4) % 2 === 0;
         color = flashing ? "#ffffff" : "#0000cc";
       }
 
-      ctx.save();
+      c.save();
       if (ghost.mode !== "frightened") {
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 6;
+        c.shadowColor = color;
+        c.shadowBlur = 6;
       }
-
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(cx, y + w / 2, w / 2, Math.PI, 0, false);
-      ctx.lineTo(x + w, y + h);
-      const waveW = w / 3;
-      ctx.lineTo(x + w - waveW / 2, y + h - 5);
-      ctx.lineTo(x + w - waveW, y + h);
-      ctx.lineTo(x + waveW / 2 + waveW / 2, y + h - 5);
-      ctx.lineTo(x + waveW, y + h);
-      ctx.lineTo(x + waveW / 2, y + h - 5);
-      ctx.lineTo(x, y + h);
-      ctx.closePath();
-      ctx.fill();
-      ctx.shadowBlur = 0;
+      c.fillStyle = color;
+      c.beginPath();
+      c.arc(cx, y + w / 2, w / 2, Math.PI, 0, false);
+      c.lineTo(x + w, y + h);
+      const ww = w / 3;
+      c.lineTo(x + w - ww / 2, y + h - 5);
+      c.lineTo(x + w - ww, y + h);
+      c.lineTo(x + ww / 2 + ww / 2, y + h - 5);
+      c.lineTo(x + ww, y + h);
+      c.lineTo(x + ww / 2, y + h - 5);
+      c.lineTo(x, y + h);
+      c.closePath();
+      c.fill();
+      c.shadowBlur = 0;
 
       if (ghost.mode === "frightened") {
-        ctx.fillStyle = "#ffffff";
-        ctx.beginPath();
-        ctx.arc(cx - 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(cx + 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(cx - 6, y + h / 2 + 4);
-        ctx.lineTo(cx - 3, y + h / 2 + 2);
-        ctx.lineTo(cx, y + h / 2 + 4);
-        ctx.lineTo(cx + 3, y + h / 2 + 2);
-        ctx.lineTo(cx + 6, y + h / 2 + 4);
-        ctx.stroke();
+        c.fillStyle = "#ffffff";
+        c.beginPath();
+        c.arc(cx - 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
+        c.fill();
+        c.beginPath();
+        c.arc(cx + 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = "#ffffff";
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.moveTo(cx - 6, y + h / 2 + 4);
+        c.lineTo(cx - 3, y + h / 2 + 2);
+        c.lineTo(cx, y + h / 2 + 4);
+        c.lineTo(cx + 3, y + h / 2 + 2);
+        c.lineTo(cx + 6, y + h / 2 + 4);
+        c.stroke();
       } else {
-        drawGhostEyes(ctx, ghost);
+        drawGhostEyes(c, ghost);
       }
-      ctx.restore();
-    },
-    [drawGhostEyes],
-  );
+      c.restore();
+    }
 
-  const drawHUD = useCallback(
-    (ctx: CanvasRenderingContext2D, state: GameState) => {
-      ctx.fillStyle = "#050510";
-      ctx.fillRect(0, 0, CANVAS_W, HUD_HEIGHT);
-      ctx.fillStyle = "#ffd700";
-      ctx.font = "bold 13px 'JetBrains Mono', monospace";
-      ctx.fillText(`SCORE: ${state.score}`, 10, 18);
-      ctx.fillStyle = "#00ffff";
-      ctx.fillText(`LVL ${state.level}`, CANVAS_W / 2 - 22, 18);
-      ctx.fillStyle = "#ffd700";
-      const heartsStr =
+    function drawHUD(c: CanvasRenderingContext2D, state: GameState) {
+      c.fillStyle = "#050510";
+      c.fillRect(0, 0, CANVAS_W, HUD_HEIGHT);
+      c.fillStyle = "#ffd700";
+      c.font = "bold 13px 'JetBrains Mono', monospace";
+      c.fillText(`SCORE: ${state.score}`, 10, 18);
+      c.fillStyle = "#00ffff";
+      c.fillText(`LVL ${state.level}`, CANVAS_W / 2 - 22, 18);
+      c.fillStyle = "#ffd700";
+      const hearts =
         state.lives > 0 ? "♥".repeat(Math.min(state.lives, 5)) : "";
-      ctx.fillText(heartsStr, CANVAS_W - 10 - heartsStr.length * 12, 18);
-    },
-    [],
-  );
+      c.fillText(hearts, CANVAS_W - 10 - hearts.length * 12, 18);
+    }
 
-  const drawOverlay = useCallback(
-    (ctx: CanvasRenderingContext2D, state: GameState, frame: number) => {
+    function drawOverlay(c: CanvasRenderingContext2D, state: GameState) {
       if (state.gameStatus === "dying") {
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(0, 0, CANVAS_W, MAZE_TEMPLATE.length * TILE);
-        ctx.fillStyle = "#ff4444";
-        ctx.font = "bold 28px 'JetBrains Mono', monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("OUCH!", CANVAS_W / 2, (MAZE_TEMPLATE.length * TILE) / 2);
-        ctx.textAlign = "left";
+        c.fillStyle = "rgba(0,0,0,0.5)";
+        c.fillRect(0, 0, CANVAS_W, ROWS * TILE);
+        c.fillStyle = "#ff4444";
+        c.font = "bold 28px 'JetBrains Mono', monospace";
+        c.textAlign = "center";
+        c.fillText("OUCH!", CANVAS_W / 2, (ROWS * TILE) / 2);
+        c.textAlign = "left";
       } else if (state.gameStatus === "levelclear") {
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(0, 0, CANVAS_W, MAZE_TEMPLATE.length * TILE);
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#ffd700";
-        ctx.font = "bold 24px 'JetBrains Mono', monospace";
-        ctx.fillText(
+        c.fillStyle = "rgba(0,0,0,0.6)";
+        c.fillRect(0, 0, CANVAS_W, ROWS * TILE);
+        c.textAlign = "center";
+        c.fillStyle = "#ffd700";
+        c.font = "bold 24px 'JetBrains Mono', monospace";
+        c.fillText(
           `LEVEL ${state.level - 1} CLEAR!`,
           CANVAS_W / 2,
-          (MAZE_TEMPLATE.length * TILE) / 2 - 10,
+          (ROWS * TILE) / 2 - 10,
         );
-        ctx.fillStyle = "#00ffff";
-        ctx.font = "16px 'JetBrains Mono', monospace";
-        ctx.fillText(
-          "GET READY...",
-          CANVAS_W / 2,
-          (MAZE_TEMPLATE.length * TILE) / 2 + 20,
-        );
-        ctx.textAlign = "left";
+        c.fillStyle = "#00ffff";
+        c.font = "16px 'JetBrains Mono', monospace";
+        c.fillText("GET READY...", CANVAS_W / 2, (ROWS * TILE) / 2 + 20);
+        c.textAlign = "left";
       }
-      // suppress unused warning
-      void frame;
-    },
-    [],
-  );
+    }
 
-  // ── Game update logic ────────────────────────────────
-  const update = useCallback(
-    (dt: number) => {
+    // ── Update ────────────────────────────────────────────
+    function resetAfterDeath(state: GameState) {
+      state.pacPos = { x: 9, y: 16 };
+      state.pacDir = DIRS.none;
+      state.pacNextDir = DIRS.left;
+      state.ghosts = initGhosts(state.level);
+      state.powerActive = false;
+      state.powerTimer = 0;
+    }
+
+    function update(dt: number) {
       const state = stateRef.current;
-      const frame = frameRef.current;
+
       if (state.gameStatus === "gameover") return;
 
       if (state.gameStatus === "dying") {
-        state.deathTimer -= dt;
-        if (state.deathTimer <= 0) {
+        state.statusTimer -= dt;
+        if (state.statusTimer <= 0) {
           state.lives--;
-          onLivesUpdate(state.lives);
+          onLivesUpdateRef.current(state.lives);
           if (state.lives <= 0) {
             state.gameStatus = "gameover";
-            onGameOver(state.score);
+            onGameOverRef.current(state.score);
             setGameStatus("gameover");
           } else {
             resetAfterDeath(state);
@@ -538,9 +579,9 @@ export default function PacmanGame({
       }
 
       if (state.gameStatus === "levelclear") {
-        state.deathTimer -= dt;
-        if (state.deathTimer <= 0) {
-          const nextLevel = state.level; // already incremented
+        state.statusTimer -= dt;
+        if (state.statusTimer <= 0) {
+          const nextLevel = state.level;
           const prevScore = state.score;
           const prevLives = state.lives;
           stateRef.current = {
@@ -553,20 +594,7 @@ export default function PacmanGame({
         return;
       }
 
-      // Pacman mouth animation
-      if (state.pacDir.x !== 0 || state.pacDir.y !== 0) {
-        if (state.pacMouthOpen) {
-          state.pacMouthAngle = Math.max(0.02, state.pacMouthAngle - 0.04);
-          if (state.pacMouthAngle <= 0.02) state.pacMouthOpen = false;
-        } else {
-          state.pacMouthAngle = Math.min(0.4, state.pacMouthAngle + 0.04);
-          if (state.pacMouthAngle >= 0.4) state.pacMouthOpen = true;
-        }
-      } else {
-        state.pacMouthAngle = 0.25;
-      }
-
-      // Read input
+      // ── Read keyboard ──
       if (keysRef.current.has("ArrowUp") || keysRef.current.has("w"))
         state.pacNextDir = DIRS.up;
       else if (keysRef.current.has("ArrowDown") || keysRef.current.has("s"))
@@ -576,47 +604,59 @@ export default function PacmanGame({
       else if (keysRef.current.has("ArrowRight") || keysRef.current.has("d"))
         state.pacNextDir = DIRS.right;
 
-      const speed = PACMAN_SPEED * (dt / 16);
-      const aligned = isGridAligned(state.pacX, state.pacY);
+      // ── Move Pacman ──
+      const pacStep = PAC_SPEED * dt;
 
-      if (aligned) {
-        if (canMoveDir(state.maze, state.pacX, state.pacY, state.pacNextDir)) {
+      if (isTileAligned(state.pacPos)) {
+        // Snap to exact tile
+        state.pacPos = snapPos(state.pacPos);
+        // Try to turn
+        if (canMove(state.maze, state.pacPos, state.pacNextDir, false)) {
           state.pacDir = state.pacNextDir;
-          state.pacX = snapToGrid(state.pacX);
-          state.pacY = snapToGrid(state.pacY);
         }
       }
 
-      if (canMoveDir(state.maze, state.pacX, state.pacY, state.pacDir)) {
-        state.pacX += state.pacDir.x * speed;
-        state.pacY += state.pacDir.y * speed;
-        if (state.pacX < -TILE) state.pacX = COLS * TILE;
-        if (state.pacX > COLS * TILE) state.pacX = -TILE;
-      } else if (aligned) {
-        state.pacX = snapToGrid(state.pacX);
-        state.pacY = snapToGrid(state.pacY);
+      if (canMove(state.maze, state.pacPos, state.pacDir, false)) {
+        state.pacPos = {
+          x: state.pacPos.x + state.pacDir.x * pacStep,
+          y: state.pacPos.y + state.pacDir.y * pacStep,
+        };
+        // Tunnel
+        if (state.pacPos.x < -0.5) state.pacPos.x = COLS - 0.5;
+        if (state.pacPos.x > COLS - 0.5) state.pacPos.x = -0.5;
+      } else if (isTileAligned(state.pacPos)) {
+        state.pacPos = snapPos(state.pacPos);
       }
 
-      // Eat pellets
-      const pacCol = Math.round(state.pacX / TILE);
-      const pacRow = Math.round(state.pacY / TILE);
-      if (
-        pacRow >= 0 &&
-        pacRow < state.maze.length &&
-        pacCol >= 0 &&
-        pacCol < COLS
-      ) {
-        const cell = state.maze[pacRow][pacCol];
+      // ── Pacman mouth ──
+      if (state.pacDir.x !== 0 || state.pacDir.y !== 0) {
+        const speed = 4 * dt;
+        if (state.pacMouthOpen) {
+          state.pacMouthAngle = Math.max(0.02, state.pacMouthAngle - speed);
+          if (state.pacMouthAngle <= 0.02) state.pacMouthOpen = false;
+        } else {
+          state.pacMouthAngle = Math.min(0.4, state.pacMouthAngle + speed);
+          if (state.pacMouthAngle >= 0.4) state.pacMouthOpen = true;
+        }
+      } else {
+        state.pacMouthAngle = 0.25;
+      }
+
+      // ── Eat pellets ──
+      const pc = Math.round(state.pacPos.x);
+      const pr = Math.round(state.pacPos.y);
+      if (pr >= 0 && pr < ROWS && pc >= 0 && pc < COLS) {
+        const cell = state.maze[pr][pc];
         if (cell === 2) {
-          state.maze[pacRow][pacCol] = 0;
+          state.maze[pr][pc] = 0;
           state.score += 10;
           state.pelletsLeft--;
-          onScoreUpdate(state.score);
+          onScoreUpdateRef.current(state.score);
         } else if (cell === 3) {
-          state.maze[pacRow][pacCol] = 0;
+          state.maze[pr][pc] = 0;
           state.score += 50;
           state.pelletsLeft--;
-          onScoreUpdate(state.score);
+          onScoreUpdateRef.current(state.score);
           state.powerActive = true;
           state.powerTimer = POWER_DURATION;
           for (const g of state.ghosts) {
@@ -630,15 +670,15 @@ export default function PacmanGame({
 
       if (state.pelletsLeft <= 0) {
         state.gameStatus = "levelclear";
-        state.deathTimer = 180;
+        state.statusTimer = 3;
         state.level++;
         setGameStatus("levelclear");
         return;
       }
 
-      // Power timer
+      // ── Power timer ──
       if (state.powerActive) {
-        state.powerTimer -= dt / 16;
+        state.powerTimer -= dt;
         if (state.powerTimer <= 0) {
           state.powerActive = false;
           for (const g of state.ghosts) {
@@ -647,129 +687,115 @@ export default function PacmanGame({
         }
       }
 
-      // Ghost updates
+      // ── Ghost updates ──
       for (const ghost of state.ghosts) {
+        // Release timer countdown
+        if (ghost.releaseTimer > 0) {
+          ghost.releaseTimer -= dt;
+          // While waiting, bounce up/down inside house
+          const gcol = Math.round(ghost.pos.x);
+          const grow = Math.round(ghost.pos.y);
+          const step = GHOST_SPEED * 0.5 * dt;
+          const nd = ghost.dir.y !== 0 ? ghost.dir : DIRS.up;
+          const ngrow = grow + nd.y;
+          if (ghostPassable(state.maze, gcol, ngrow)) {
+            ghost.pos = { x: ghost.pos.x, y: ghost.pos.y + nd.y * step };
+            ghost.dir = nd;
+          } else {
+            ghost.dir = { x: -ghost.dir.x, y: -ghost.dir.y };
+          }
+          continue;
+        }
+
+        // Frightened timer
         if (ghost.mode === "frightened") {
-          ghost.frightenTimer -= dt / 16;
+          ghost.frightenTimer -= dt;
           if (ghost.frightenTimer <= 0) ghost.mode = "chase";
         }
 
-        ghost.moveTimer -= dt / 16;
-        if (ghost.moveTimer > 0) continue;
-
-        const ghostSpeed =
-          ghost.mode === "frightened"
-            ? ghost.speed * 0.6
+        const ghostStep =
+          (ghost.mode === "frightened"
+            ? GHOST_SPEED * 0.55
             : ghost.mode === "eaten"
-              ? ghost.speed * 2
-              : ghost.speed;
-        const step = ghostSpeed * (dt / 16);
+              ? GHOST_SPEED * 2
+              : GHOST_SPEED) * dt;
 
-        if (isGridAligned(ghost.x, ghost.y, 6)) {
+        // At tile boundary: pick new direction
+        if (isTileAligned(ghost.pos)) {
+          ghost.pos = snapPos(ghost.pos);
           ghost.dir = pickGhostDir(ghost, state);
-          ghost.x = snapToGrid(ghost.x);
-          ghost.y = snapToGrid(ghost.y);
         }
 
-        const nx = ghost.x + ghost.dir.x * step;
-        const ny = ghost.y + ghost.dir.y * step;
-        if (
-          isPassable(state.maze, Math.round(nx / TILE), Math.round(ny / TILE))
-        ) {
-          ghost.x = nx;
-          ghost.y = ny;
-          if (ghost.x < -TILE) ghost.x = COLS * TILE;
-          if (ghost.x > COLS * TILE) ghost.x = -TILE;
+        // Move
+        const ngx = ghost.pos.x + ghost.dir.x * ghostStep;
+        const ngy = ghost.pos.y + ghost.dir.y * ghostStep;
+        const ngCol = Math.round(ngx);
+        const ngRow = Math.round(ngy);
+
+        if (ghostPassable(state.maze, ngCol, ngRow)) {
+          ghost.pos = { x: ngx, y: ngy };
+          // Tunnel
+          if (ghost.pos.x < -0.5) ghost.pos.x = COLS - 0.5;
+          if (ghost.pos.x > COLS - 0.5) ghost.pos.x = -0.5;
         } else {
-          const valids = [DIRS.up, DIRS.down, DIRS.left, DIRS.right].filter(
-            (d) => {
-              return isPassable(
-                state.maze,
-                Math.round(ghost.x / TILE) + d.x,
-                Math.round(ghost.y / TILE) + d.y,
-              );
-            },
-          );
-          if (valids.length > 0)
-            ghost.dir = valids[Math.floor(Math.random() * valids.length)];
-          ghost.x = snapToGrid(ghost.x);
-          ghost.y = snapToGrid(ghost.y);
+          // Snap and reverse
+          ghost.pos = snapPos(ghost.pos);
+          ghost.dir = { x: -ghost.dir.x, y: -ghost.dir.y };
         }
       }
 
-      // Collision
+      // ── Collision ──
       for (const ghost of state.ghosts) {
         if (ghost.mode === "eaten") continue;
-        const dx = Math.abs(ghost.x - state.pacX);
-        const dy = Math.abs(ghost.y - state.pacY);
-        if (dx < TILE * 0.65 && dy < TILE * 0.65) {
+        const dx = Math.abs(ghost.pos.x - state.pacPos.x);
+        const dy = Math.abs(ghost.pos.y - state.pacPos.y);
+        if (dx < 0.7 && dy < 0.7) {
           if (ghost.mode === "frightened") {
             ghost.mode = "eaten";
             state.score += 200;
-            onScoreUpdate(state.score);
-            const respawnGhost = ghost;
+            onScoreUpdateRef.current(state.score);
+            const g = ghost;
             setTimeout(() => {
-              respawnGhost.x = 9 * TILE;
-              respawnGhost.y = 9 * TILE;
-              respawnGhost.mode = "chase";
-              respawnGhost.dir = DIRS.up;
+              g.pos = { x: 9, y: 10 };
+              g.mode = "chase";
+              g.dir = DIRS.up;
+              g.releaseTimer = 0;
             }, 3000);
           } else {
             state.gameStatus = "dying";
-            state.deathTimer = 120;
+            state.statusTimer = 2;
             setGameStatus("dying");
             return;
           }
         }
       }
+    }
 
-      void frame;
-    },
-    [onScoreUpdate, onGameOver, onLivesUpdate, resetAfterDeath],
-  );
-
-  const draw = useCallback(
-    (ctx: CanvasRenderingContext2D) => {
+    function draw() {
       const state = stateRef.current;
       const frame = frameRef.current;
 
       drawHUD(ctx, state);
-
       ctx.save();
       ctx.translate(0, HUD_HEIGHT);
       drawMaze(ctx, state.maze, frame);
-      for (const ghost of state.ghosts) {
-        drawGhost(ctx, ghost);
-      }
+      for (const ghost of state.ghosts) drawGhost(ctx, ghost);
       if (state.gameStatus !== "dying" || Math.floor(frame / 4) % 2 === 0) {
         drawPacman(ctx, state);
       }
-      drawOverlay(ctx, state, frame);
+      drawOverlay(ctx, state);
       ctx.restore();
-    },
-    [drawHUD, drawMaze, drawGhost, drawPacman, drawOverlay],
-  );
-
-  // ── Main game loop ───────────────────────────────────
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    stateRef.current = createInitialState(initialLevel);
-    frameRef.current = 0;
-    lastTimeRef.current = 0;
+    }
 
     const loop = (timestamp: number) => {
       const dt = lastTimeRef.current
-        ? Math.min(timestamp - lastTimeRef.current, 33)
-        : 16;
+        ? Math.min((timestamp - lastTimeRef.current) / 1000, 0.05) // seconds, capped at 50ms
+        : 0.016;
       lastTimeRef.current = timestamp;
       frameRef.current++;
 
       update(dt);
-      draw(ctx);
+      draw();
 
       if (stateRef.current.gameStatus !== "gameover") {
         animRef.current = requestAnimationFrame(loop);
@@ -780,9 +806,9 @@ export default function PacmanGame({
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [update, draw, initialLevel]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Keyboard input ───────────────────────────────────
+  // ── Keyboard ──────────────────────────────────────────
   useEffect(() => {
     const gameKeys = [
       "ArrowUp",
@@ -809,15 +835,15 @@ export default function PacmanGame({
     };
   }, []);
 
-  // ── Mobile D-pad ─────────────────────────────────────
-  const handleDpad = useCallback((dir: string) => {
+  // ── Mobile D-pad ──────────────────────────────────────
+  const handleDpad = (dir: string) => {
     keysRef.current.clear();
     if (dir === "up") keysRef.current.add("ArrowUp");
     else if (dir === "down") keysRef.current.add("ArrowDown");
     else if (dir === "left") keysRef.current.add("ArrowLeft");
     else if (dir === "right") keysRef.current.add("ArrowRight");
     setTimeout(() => keysRef.current.clear(), 200);
-  }, []);
+  };
 
   return (
     <div className="flex flex-col items-center gap-4">

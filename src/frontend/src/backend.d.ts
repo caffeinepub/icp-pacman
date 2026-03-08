@@ -28,6 +28,7 @@ export interface backendInterface {
         jackpotBalance: bigint;
         totalPlays: bigint;
     }>;
+    getCallerActor(): Promise<UserProfile>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
     getCountdownTarget(): Promise<bigint>;

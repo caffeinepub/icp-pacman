@@ -31,6 +31,7 @@ export interface _SERVICE {
       'totalPlays' : bigint,
     }
   >,
+  'getCallerActor' : ActorMethod<[], UserProfile>,
   'getCallerUserProfile' : ActorMethod<[], [] | [UserProfile]>,
   'getCallerUserRole' : ActorMethod<[], UserRole>,
   'getCountdownTarget' : ActorMethod<[], bigint>,

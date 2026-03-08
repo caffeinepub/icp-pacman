@@ -7,8 +7,12 @@ import Iter "mo:core/Iter";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
 import Runtime "mo:core/Runtime";
+
 import MixinAuthorization "authorization/MixinAuthorization";
 import AccessControl "authorization/access-control";
+import Blob "mo:core/Blob";
+import Debug "mo:core/Debug";
+
 
 actor {
   type ScoreEntry = {
@@ -41,8 +45,8 @@ actor {
 
   // User profile functions
   public query ({ caller }) func getCallerUserProfile() : async ?UserProfile {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can view profiles");
+    if (caller.isAnonymous()) {
+      Runtime.trap("Unauthorized: Anonymous users cannot access profiles");
     };
     userProfiles.get(caller);
   };
@@ -55,22 +59,21 @@ actor {
   };
 
   public shared ({ caller }) func saveCallerUserProfile(profile : UserProfile) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can save profiles");
+    if (caller.isAnonymous()) {
+      Runtime.trap("Unauthorized: Anonymous users cannot save profiles");
     };
     userProfiles.add(caller, profile);
   };
 
   // Score functions
   public shared ({ caller }) func submitScore(score : Nat) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can submit scores");
+    if (caller.isAnonymous()) {
+      Runtime.trap("Unauthorized: Anonymous users cannot submit scores");
     };
-    
+
     let existingScore = scores.get(caller);
     switch (existingScore) {
       case (?existing) {
-        // Only update if new score is better
         if (score > existing.score) {
           let newScore : ScoreEntry = {
             principal = caller;
@@ -100,8 +103,8 @@ actor {
 
   // Jackpot functions
   public shared ({ caller }) func startGame() : async { ok : Bool; message : Text } {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can start a game");
+    if (caller.isAnonymous()) {
+      Runtime.trap("Unauthorized: Anonymous users cannot start a game");
     };
     jackpotBalance += 6_250_000;
     totalPlays += 1;
@@ -116,9 +119,32 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admin can trigger payout");
     };
-    let amount = jackpotBalance;
-    jackpotBalance := 0;
-    { ok = true; amount; message = "Payout triggered successfully" };
+
+    switch (payoutWallet) {
+      case (null) {
+        { ok = false; amount = 0; message = "No payout wallet set" };
+      };
+      case (?wallet) {
+        let amount = jackpotBalance;
+        jackpotBalance := 0;
+
+        let transferResult = await performTransfer(wallet, amount);
+        switch (transferResult) {
+          case (true) {
+            { ok = true; amount; message = "Payout triggered successfully" };
+          };
+          case (false) {
+            jackpotBalance := amount;
+            { ok = false; amount = 0; message = "Transfer failed" };
+          };
+        };
+      };
+    };
+  };
+
+  func performTransfer(wallet : Principal, amount : Nat) : async Bool {
+    Debug.print("Pretending to send " # amount.toText() # " e8s to " # wallet.toText());
+    true;
   };
 
   // Countdown functions
@@ -141,7 +167,10 @@ actor {
     payoutWallet := ?wallet;
   };
 
-  public query func getPayoutWallet() : async ?Principal {
+  public query ({ caller }) func getPayoutWallet() : async ?Principal {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admin can view payout wallet");
+    };
     payoutWallet;
   };
 
@@ -154,5 +183,10 @@ actor {
 
   public query func getTotalPlays() : async Nat {
     totalPlays;
+  };
+
+  public query ({ caller }) func getCallerActor() : async UserProfile {
+    Debug.print("getCallerActor called by: " # caller.toText());
+    Runtime.trap("Should not be called: Any call to getCallerActor is a bug. The frontend code handles all actor spawning via createActor and requests the backend only for existing user profiles. If this happens, it is a bug.");
   };
 };

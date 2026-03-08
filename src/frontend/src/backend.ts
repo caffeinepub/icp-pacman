@@ -111,6 +111,7 @@ export interface backendInterface {
         jackpotBalance: bigint;
         totalPlays: bigint;
     }>;
+    getCallerActor(): Promise<UserProfile>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
     getCountdownTarget(): Promise<bigint>;
@@ -180,6 +181,20 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.getAdminStats();
+            return result;
+        }
+    }
+    async getCallerActor(): Promise<UserProfile> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getCallerActor();
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getCallerActor();
             return result;
         }
     }
