@@ -3,16 +3,12 @@ import Nat "mo:core/Nat";
 import Map "mo:core/Map";
 import Time "mo:core/Time";
 import Array "mo:core/Array";
-import Iter "mo:core/Iter";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
 import Runtime "mo:core/Runtime";
-
 import MixinAuthorization "authorization/MixinAuthorization";
 import AccessControl "authorization/access-control";
-import Blob "mo:core/Blob";
 import Debug "mo:core/Debug";
-
 
 actor {
   type ScoreEntry = {
@@ -43,10 +39,36 @@ actor {
   let accessControlState = AccessControl.initState();
   include MixinAuthorization(accessControlState);
 
+  func getOrAssignRole(caller : Principal) : AccessControl.UserRole {
+    if (caller.isAnonymous()) {
+      Runtime.trap("Anonymous users cannot perform this action");
+    };
+
+    let role = accessControlState.userRoles.get(caller);
+
+    switch (role) {
+      case (null) {
+        if (not accessControlState.adminAssigned) {
+          accessControlState.adminAssigned := true;
+          accessControlState.userRoles.add(caller, #admin);
+          #admin;
+        } else {
+          accessControlState.userRoles.add(caller, #user);
+          #user;
+        };
+      };
+      case (?r) { r };
+    };
+  };
+
+  public shared ({ caller }) func registerOrGetRole() : async AccessControl.UserRole {
+    getOrAssignRole(caller);
+  };
+
   // User profile functions
   public query ({ caller }) func getCallerUserProfile() : async ?UserProfile {
-    if (caller.isAnonymous()) {
-      Runtime.trap("Unauthorized: Anonymous users cannot access profiles");
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can access profiles");
     };
     userProfiles.get(caller);
   };
@@ -59,16 +81,16 @@ actor {
   };
 
   public shared ({ caller }) func saveCallerUserProfile(profile : UserProfile) : async () {
-    if (caller.isAnonymous()) {
-      Runtime.trap("Unauthorized: Anonymous users cannot save profiles");
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can save profiles");
     };
     userProfiles.add(caller, profile);
   };
 
   // Score functions
   public shared ({ caller }) func submitScore(score : Nat) : async () {
-    if (caller.isAnonymous()) {
-      Runtime.trap("Unauthorized: Anonymous users cannot submit scores");
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can submit scores");
     };
 
     let existingScore = scores.get(caller);
@@ -83,7 +105,7 @@ actor {
           scores.add(caller, newScore);
         };
       };
-      case null {
+      case (null) {
         let newScore : ScoreEntry = {
           principal = caller;
           score;
@@ -103,12 +125,25 @@ actor {
 
   // Jackpot functions
   public shared ({ caller }) func startGame() : async { ok : Bool; message : Text } {
-    if (caller.isAnonymous()) {
-      Runtime.trap("Unauthorized: Anonymous users cannot start a game");
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can start a game");
     };
-    jackpotBalance += 6_250_000;
-    totalPlays += 1;
-    { ok = true; message = "Game started successfully" };
+
+    let role = getOrAssignRole(caller);
+
+    switch (role) {
+      case (#admin) {
+        { ok = true; message = "Game started successfully (admin play - no cost)" };
+      };
+      case (#user) {
+        jackpotBalance += 6_250_000;
+        totalPlays += 1;
+        { ok = true; message = "Game started successfully" };
+      };
+      case (#guest) {
+        Runtime.trap("Unauthorized: Guests cannot start a game");
+      };
+    };
   };
 
   public query func getJackpotBalance() : async Nat {

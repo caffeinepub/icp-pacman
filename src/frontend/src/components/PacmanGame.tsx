@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 // ── Maze Layout ──────────────────────────────────────────
-// 0=open  1=wall  2=pellet  3=power-pellet  4=ghost-house-interior
+// 0=open  1=wall  2=pellet  3=power-pellet  4=ghost-house-interior  5=ghost-door(passable only by ghosts leaving)
 const MAZE_TEMPLATE: number[][] = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1],
@@ -11,12 +11,12 @@ const MAZE_TEMPLATE: number[][] = [
   [1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1],
   [1, 2, 2, 2, 2, 1, 2, 2, 2, 1, 2, 2, 2, 1, 2, 2, 2, 2, 1],
   [1, 1, 1, 1, 2, 1, 1, 1, 0, 1, 0, 1, 1, 1, 2, 1, 1, 1, 1],
-  [1, 1, 1, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 1, 1, 1],
+  [1, 1, 1, 1, 2, 1, 0, 0, 0, 5, 0, 0, 0, 1, 2, 1, 1, 1, 1],
   [1, 1, 1, 1, 2, 1, 0, 4, 4, 4, 4, 4, 0, 1, 2, 1, 1, 1, 1],
   [0, 0, 0, 0, 2, 0, 0, 4, 4, 4, 4, 4, 0, 0, 2, 0, 0, 0, 0],
   [1, 1, 1, 1, 2, 1, 0, 4, 4, 4, 4, 4, 0, 1, 2, 1, 1, 1, 1],
   [1, 1, 1, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 1, 1, 1],
-  [1, 1, 1, 1, 2, 1, 0, 1, 1, 1, 1, 1, 0, 1, 2, 1, 1, 1, 1],
+  [1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1],
   [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1],
   [1, 2, 1, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 1, 2, 1],
   [1, 3, 2, 1, 2, 2, 2, 2, 2, 0, 2, 2, 2, 2, 2, 1, 2, 3, 1],
@@ -34,11 +34,18 @@ const HUD_HEIGHT = TILE;
 const CANVAS_W = COLS * TILE;
 const CANVAS_H = ROWS * TILE + HUD_HEIGHT;
 
-// Pacman speed: tiles per second
-const PAC_SPEED = 7.5;
-// Ghost speed: tiles per second
-const GHOST_SPEED = 5.5;
-const POWER_DURATION = 8; // seconds
+// Ghost house bounds (the interior region)
+const HOUSE_COL_MIN = 7;
+const HOUSE_COL_MAX = 11;
+const HOUSE_ROW_MIN = 9;
+const HOUSE_ROW_MAX = 11;
+const HOUSE_EXIT_COL = 9;
+const HOUSE_EXIT_ROW = 8; // the door tile row
+
+// Speeds in tiles/second
+const PAC_SPEED = 7.0;
+const GHOST_SPEED = 5.0;
+const POWER_DURATION = 8;
 
 type Dir = { x: number; y: number };
 const DIRS: Record<string, Dir> = {
@@ -48,28 +55,26 @@ const DIRS: Record<string, Dir> = {
   right: { x: 1, y: 0 },
   none: { x: 0, y: 0 },
 };
-const DIR_LIST = [DIRS.up, DIRS.down, DIRS.left, DIRS.right];
+const DIR_LIST: Dir[] = [DIRS.up, DIRS.down, DIRS.left, DIRS.right];
 
-// Tile coordinate position (float, in tile units)
 interface Pos {
   x: number;
   y: number;
 }
 
 interface Ghost {
-  pos: Pos; // tile-unit position (center of current tile + sub-tile offset)
+  pos: Pos;
   dir: Dir;
-  nextDir: Dir;
   color: string;
-  mode: "chase" | "scatter" | "frightened" | "eaten";
+  mode: "house" | "exiting" | "chase" | "scatter" | "frightened" | "eaten";
   frightenTimer: number;
   scatterTarget: { tx: number; ty: number };
-  releaseTimer: number; // seconds before this ghost leaves the house
+  releaseTimer: number; // seconds until ghost starts leaving house (0 = already out)
 }
 
 interface GameState {
   maze: number[][];
-  pacPos: Pos; // tile-unit position
+  pacPos: Pos;
   pacDir: Dir;
   pacNextDir: Dir;
   pacMouthAngle: number;
@@ -82,7 +87,7 @@ interface GameState {
   powerActive: boolean;
   powerTimer: number;
   gameStatus: "playing" | "dying" | "levelclear" | "gameover";
-  statusTimer: number; // seconds remaining in dying/levelclear states
+  statusTimer: number;
 }
 
 function deepCopyMaze(template: number[][]): number[][] {
@@ -96,67 +101,73 @@ function countPellets(maze: number[][]): number {
 }
 
 function tileAt(maze: number[][], col: number, row: number): number {
-  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return 0;
+  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return 1; // treat OOB as wall
   return maze[row][col];
 }
 
-// Pacman can walk through anything except walls (1)
+// Pacman can walk on: open(0), pellet(2), power-pellet(3), door(5) -- NOT wall(1), NOT ghost-interior(4)
 function pacPassable(maze: number[][], col: number, row: number): boolean {
   const t = tileAt(maze, col, row);
-  return t !== 1;
+  return t !== 1 && t !== 4;
 }
 
-// Ghosts can walk through open tiles, pellet tiles, and ghost-house interior
-// but NOT walls (1) and NOT the ghost-house *door* row unless leaving
-function ghostPassable(maze: number[][], col: number, row: number): boolean {
+// Ghosts in normal mode can walk on open/pellet/door tiles -- NOT walls, NOT ghost-interior (unless exiting)
+function ghostPassableNormal(
+  maze: number[][],
+  col: number,
+  row: number,
+): boolean {
+  const t = tileAt(maze, col, row);
+  return t !== 1 && t !== 4;
+}
+
+// Ghosts inside house or exiting can walk on everything except walls
+function ghostPassableInHouse(
+  maze: number[][],
+  col: number,
+  row: number,
+): boolean {
   const t = tileAt(maze, col, row);
   return t !== 1;
 }
 
-function initGhosts(level: number): Ghost[] {
-  const speed = Math.min(GHOST_SPEED + (level - 1) * 0.3, 9);
-  void speed;
-  // All ghosts start just outside the house at the corridor, staggered by releaseTimer
+function initGhosts(_level: number): Ghost[] {
   return [
     {
-      pos: { x: 9, y: 8 }, // Blinky starts outside immediately
+      pos: { x: HOUSE_EXIT_COL, y: HOUSE_EXIT_ROW - 1 }, // Blinky starts just above door
       dir: DIRS.left,
-      nextDir: DIRS.left,
       color: "#FF0000",
-      mode: "chase",
+      mode: "scatter",
       frightenTimer: 0,
       scatterTarget: { tx: 17, ty: 0 },
-      releaseTimer: 0,
+      releaseTimer: 0, // immediately out
     },
     {
-      pos: { x: 9, y: 10 }, // Pinky inside house
+      pos: { x: 9, y: 10 }, // Pinky inside house center
       dir: DIRS.up,
-      nextDir: DIRS.up,
       color: "#FFB8FF",
-      mode: "scatter",
+      mode: "house",
       frightenTimer: 0,
       scatterTarget: { tx: 1, ty: 0 },
-      releaseTimer: 4,
+      releaseTimer: 5,
     },
     {
-      pos: { x: 8, y: 10 }, // Inky inside house
+      pos: { x: 8, y: 10 }, // Inky inside house left
       dir: DIRS.down,
-      nextDir: DIRS.down,
       color: "#00FFFF",
-      mode: "scatter",
+      mode: "house",
       frightenTimer: 0,
       scatterTarget: { tx: 17, ty: 21 },
-      releaseTimer: 8,
+      releaseTimer: 10,
     },
     {
-      pos: { x: 10, y: 10 }, // Clyde inside house
+      pos: { x: 10, y: 10 }, // Clyde inside house right
       dir: DIRS.up,
-      nextDir: DIRS.up,
       color: "#FFB847",
-      mode: "scatter",
+      mode: "house",
       frightenTimer: 0,
       scatterTarget: { tx: 1, ty: 21 },
-      releaseTimer: 12,
+      releaseTimer: 15,
     },
   ];
 }
@@ -182,61 +193,43 @@ function createInitialState(level = 1): GameState {
   };
 }
 
-// Tile-aligned means the fractional part of position is near 0
-function isTileAligned(pos: Pos, threshold = 0.2): boolean {
+// Is pos within `threshold` tiles of its nearest tile center?
+function isTileAligned(pos: Pos, threshold = 0.15): boolean {
   return (
     Math.abs(pos.x - Math.round(pos.x)) < threshold &&
     Math.abs(pos.y - Math.round(pos.y)) < threshold
   );
 }
 
-function snapPos(pos: Pos): Pos {
+function snapToTile(pos: Pos): Pos {
   return { x: Math.round(pos.x), y: Math.round(pos.y) };
 }
 
-function canMove(
+// Can the entity at `pos` move one step in `dir` next frame?
+// Uses the tile center of the current position.
+function canMoveDir(
   maze: number[][],
   pos: Pos,
   dir: Dir,
-  isGhost = false,
+  isGhost: boolean,
 ): boolean {
   if (dir.x === 0 && dir.y === 0) return false;
   const col = Math.round(pos.x) + dir.x;
   const row = Math.round(pos.y) + dir.y;
-  return isGhost ? ghostPassable(maze, col, row) : pacPassable(maze, col, row);
+  return isGhost
+    ? ghostPassableNormal(maze, col, row)
+    : pacPassable(maze, col, row);
 }
 
-// Ghost AI: pick best direction at a junction
+// Ghost AI: pick the best direction from the current tile
 function pickGhostDir(ghost: Ghost, state: GameState): Dir {
   const col = Math.round(ghost.pos.x);
   const row = Math.round(ghost.pos.y);
-
-  // While still in the release timer, just bounce up/down inside house
-  if (ghost.releaseTimer > 0) {
-    // Try to keep moving up/down
-    const preferred = ghost.dir.y !== 0 ? ghost.dir : DIRS.up;
-    if (ghostPassable(state.maze, col + preferred.x, row + preferred.y))
-      return preferred;
-    const flip = { x: -preferred.x, y: -preferred.y };
-    if (ghostPassable(state.maze, col + flip.x, row + flip.y)) return flip;
-    return DIRS.none;
-  }
-
-  // Exiting house: navigate toward col=9, row=8 (the door)
-  if (row >= 8 && row <= 12 && col >= 6 && col <= 12) {
-    // Inside house area: move toward exit at (9, 8)
-    if (col !== 9) {
-      const dx = col < 9 ? DIRS.right : DIRS.left;
-      if (ghostPassable(state.maze, col + dx.x, row + dx.y)) return dx;
-    }
-    if (row > 8) {
-      if (ghostPassable(state.maze, col, row - 1)) return DIRS.up;
-    }
-  }
+  const reverse: Dir = { x: -ghost.dir.x, y: -ghost.dir.y };
 
   const target =
     ghost.mode === "scatter"
-      ? ghost.scatterTarget
+      ? { tx: ghost.scatterTarget.tx, ty: ghost.scatterTarget.ty }
       : ghost.mode === "frightened"
         ? {
             tx: Math.floor(Math.random() * COLS),
@@ -244,17 +237,15 @@ function pickGhostDir(ghost: Ghost, state: GameState): Dir {
           }
         : { tx: Math.round(state.pacPos.x), ty: Math.round(state.pacPos.y) };
 
-  const reverse = { x: -ghost.dir.x, y: -ghost.dir.y };
-
-  let bestDir: Dir = DIRS.none;
+  let bestDir: Dir | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
 
   for (const d of DIR_LIST) {
-    // No reversing (unless it's the only option)
+    // Don't reverse unless forced
     if (d.x === reverse.x && d.y === reverse.y) continue;
     const nc = col + d.x;
     const nr = row + d.y;
-    if (!ghostPassable(state.maze, nc, nr)) continue;
+    if (!ghostPassableNormal(state.maze, nc, nr)) continue;
     const dist = (nc - target.tx) ** 2 + (nr - target.ty) ** 2;
     if (dist < bestDist) {
       bestDist = dist;
@@ -262,14 +253,15 @@ function pickGhostDir(ghost: Ghost, state: GameState): Dir {
     }
   }
 
-  // If completely stuck (reverse only option), allow reverse
-  if (bestDir === DIRS.none) {
-    if (ghostPassable(state.maze, col + reverse.x, col + reverse.y)) {
+  // If stuck (only reverse available), allow it
+  if (!bestDir) {
+    if (ghostPassableNormal(state.maze, col + reverse.x, row + reverse.y)) {
       return reverse;
     }
+    return DIRS.none;
   }
 
-  return bestDir.x !== undefined ? bestDir : ghost.dir;
+  return bestDir;
 }
 
 export interface PacmanGameProps {
@@ -307,7 +299,7 @@ export default function PacmanGame({
     onLivesUpdateRef.current = onLivesUpdate;
   }, [onLivesUpdate]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally empty deps -- game loop runs once and uses refs
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional single-run game loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -321,6 +313,32 @@ export default function PacmanGame({
     // ── Draw helpers ──────────────────────────────────
     function toPixel(tileCoord: number): number {
       return tileCoord * TILE;
+    }
+
+    function drawGhostHouseBox(c: CanvasRenderingContext2D) {
+      // Draw a visible bordered box around the ghost house
+      const x = HOUSE_COL_MIN * TILE;
+      const y = HOUSE_ROW_MIN * TILE;
+      const w = (HOUSE_COL_MAX - HOUSE_COL_MIN + 1) * TILE;
+      const h = (HOUSE_ROW_MAX - HOUSE_ROW_MIN + 1) * TILE;
+
+      // Filled background
+      c.fillStyle = "#0d0d2b";
+      c.fillRect(x, y, w, h);
+
+      // Outer glow border
+      c.strokeStyle = "#ff69b4";
+      c.lineWidth = 2.5;
+      c.shadowColor = "#ff69b4";
+      c.shadowBlur = 8;
+      c.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      c.shadowBlur = 0;
+
+      // Door indicator (top center)
+      const doorX = HOUSE_EXIT_COL * TILE;
+      const doorY = HOUSE_EXIT_ROW * TILE;
+      c.fillStyle = "#ff69b4";
+      c.fillRect(doorX, doorY + TILE * 0.35, TILE, TILE * 0.3);
     }
 
     function drawMaze(
@@ -340,6 +358,12 @@ export default function PacmanGame({
             c.strokeStyle = "#1a3a8e";
             c.lineWidth = 1.5;
             c.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+          } else if (cell === 4) {
+            // Ghost house interior -- skip, drawn by drawGhostHouseBox
+          } else if (cell === 5) {
+            // Ghost door tile -- open corridor background
+            c.fillStyle = "#050510";
+            c.fillRect(px, py, TILE, TILE);
           } else {
             c.fillStyle = "#050510";
             c.fillRect(px, py, TILE, TILE);
@@ -370,6 +394,9 @@ export default function PacmanGame({
           }
         }
       }
+
+      // Draw ghost house box on top
+      drawGhostHouseBox(c);
     }
 
     function drawPacman(c: CanvasRenderingContext2D, state: GameState) {
@@ -451,7 +478,7 @@ export default function PacmanGame({
       const y = py + 2;
       const w = TILE - 4;
       const h = TILE - 4;
-      const cx = px + TILE / 2;
+      const cx2 = px + TILE / 2;
 
       let color = ghost.color;
       if (ghost.mode === "frightened") {
@@ -468,7 +495,7 @@ export default function PacmanGame({
       }
       c.fillStyle = color;
       c.beginPath();
-      c.arc(cx, y + w / 2, w / 2, Math.PI, 0, false);
+      c.arc(cx2, y + w / 2, w / 2, Math.PI, 0, false);
       c.lineTo(x + w, y + h);
       const ww = w / 3;
       c.lineTo(x + w - ww / 2, y + h - 5);
@@ -484,19 +511,19 @@ export default function PacmanGame({
       if (ghost.mode === "frightened") {
         c.fillStyle = "#ffffff";
         c.beginPath();
-        c.arc(cx - 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
+        c.arc(cx2 - 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
         c.fill();
         c.beginPath();
-        c.arc(cx + 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
+        c.arc(cx2 + 5, y + h / 2 - 2, 3, 0, Math.PI * 2);
         c.fill();
         c.strokeStyle = "#ffffff";
         c.lineWidth = 1.5;
         c.beginPath();
-        c.moveTo(cx - 6, y + h / 2 + 4);
-        c.lineTo(cx - 3, y + h / 2 + 2);
-        c.lineTo(cx, y + h / 2 + 4);
-        c.lineTo(cx + 3, y + h / 2 + 2);
-        c.lineTo(cx + 6, y + h / 2 + 4);
+        c.moveTo(cx2 - 6, y + h / 2 + 4);
+        c.lineTo(cx2 - 3, y + h / 2 + 2);
+        c.lineTo(cx2, y + h / 2 + 4);
+        c.lineTo(cx2 + 3, y + h / 2 + 2);
+        c.lineTo(cx2 + 6, y + h / 2 + 4);
         c.stroke();
       } else {
         drawGhostEyes(c, ghost);
@@ -555,6 +582,114 @@ export default function PacmanGame({
       state.powerTimer = 0;
     }
 
+    function updateGhost(ghost: Ghost, state: GameState, dt: number) {
+      // ── HOUSE: bounce and wait for release ──
+      if (ghost.mode === "house") {
+        ghost.releaseTimer -= dt;
+        const step = GHOST_SPEED * 0.4 * dt;
+        const col = Math.round(ghost.pos.x);
+        const row = Math.round(ghost.pos.y);
+        const nd = ghost.dir.y !== 0 ? ghost.dir : DIRS.up;
+
+        // Bounce within the house rows
+        if (ghostPassableInHouse(state.maze, col, row + nd.y)) {
+          ghost.pos = { x: ghost.pos.x, y: ghost.pos.y + nd.y * step };
+        } else {
+          ghost.dir = { x: 0, y: -nd.y };
+        }
+
+        if (ghost.releaseTimer <= 0) {
+          ghost.mode = "exiting";
+          ghost.dir = DIRS.up;
+        }
+        return;
+      }
+
+      // ── EXITING: navigate to exit position then leave ──
+      if (ghost.mode === "exiting") {
+        const step = GHOST_SPEED * dt;
+        const col = ghost.pos.x;
+        const row = ghost.pos.y;
+        const targetCol = HOUSE_EXIT_COL;
+        const targetRow = HOUSE_EXIT_ROW - 1; // one tile above the door
+
+        // First align column
+        if (Math.abs(col - targetCol) > 0.05) {
+          const dx = col < targetCol ? 1 : -1;
+          ghost.pos = { x: ghost.pos.x + dx * step, y: ghost.pos.y };
+          if (Math.abs(ghost.pos.x - targetCol) < step) ghost.pos.x = targetCol;
+          ghost.dir = dx > 0 ? DIRS.right : DIRS.left;
+          return;
+        }
+
+        // Column is aligned: move up to exit row
+        ghost.pos.x = targetCol; // keep aligned
+        if (row > targetRow) {
+          ghost.pos = {
+            x: ghost.pos.x,
+            y: Math.max(targetRow, ghost.pos.y - step),
+          };
+          ghost.dir = DIRS.up;
+          return;
+        }
+
+        // Reached exit position: now fully outside
+        ghost.pos = { x: targetCol, y: targetRow };
+        ghost.mode = "scatter";
+        ghost.dir = DIRS.left;
+        return;
+      }
+
+      // ── FRIGHTENED timer ──
+      if (ghost.mode === "frightened") {
+        ghost.frightenTimer -= dt;
+        if (ghost.frightenTimer <= 0) ghost.mode = "chase";
+      }
+
+      const speed =
+        ghost.mode === "eaten"
+          ? GHOST_SPEED * 2
+          : ghost.mode === "frightened"
+            ? GHOST_SPEED * 0.55
+            : GHOST_SPEED;
+      const ghostStep = speed * dt;
+
+      // At tile boundary: pick new direction
+      if (isTileAligned(ghost.pos)) {
+        ghost.pos = snapToTile(ghost.pos);
+        ghost.dir = pickGhostDir(ghost, state);
+      }
+
+      if (ghost.dir.x === 0 && ghost.dir.y === 0) return;
+
+      const col = Math.round(ghost.pos.x);
+      const row = Math.round(ghost.pos.y);
+
+      if (ghost.dir.x !== 0) {
+        const nx = ghost.pos.x + ghost.dir.x * ghostStep;
+        const nCol = Math.round(nx);
+        if (nCol !== col && !ghostPassableNormal(state.maze, nCol, row)) {
+          ghost.pos.x = col;
+          ghost.dir = pickGhostDir(ghost, state);
+        } else {
+          ghost.pos.x = nx;
+        }
+      } else {
+        const ny = ghost.pos.y + ghost.dir.y * ghostStep;
+        const nRow = Math.round(ny);
+        if (nRow !== row && !ghostPassableNormal(state.maze, col, nRow)) {
+          ghost.pos.y = row;
+          ghost.dir = pickGhostDir(ghost, state);
+        } else {
+          ghost.pos.y = ny;
+        }
+      }
+
+      // Tunnel wrap
+      if (ghost.pos.x < -0.5) ghost.pos.x = COLS - 0.5;
+      if (ghost.pos.x > COLS - 0.5) ghost.pos.x = -0.5;
+    }
+
     function update(dt: number) {
       const state = stateRef.current;
 
@@ -607,35 +742,51 @@ export default function PacmanGame({
       // ── Move Pacman ──
       const pacStep = PAC_SPEED * dt;
 
+      // At a tile center: try to change direction
       if (isTileAligned(state.pacPos)) {
-        // Snap to exact tile
-        state.pacPos = snapPos(state.pacPos);
-        // Try to turn
-        if (canMove(state.maze, state.pacPos, state.pacNextDir, false)) {
+        state.pacPos = snapToTile(state.pacPos);
+        // Accept queued direction if passable
+        if (canMoveDir(state.maze, state.pacPos, state.pacNextDir, false)) {
           state.pacDir = state.pacNextDir;
         }
       }
 
-      if (canMove(state.maze, state.pacPos, state.pacDir, false)) {
-        state.pacPos = {
-          x: state.pacPos.x + state.pacDir.x * pacStep,
-          y: state.pacPos.y + state.pacDir.y * pacStep,
-        };
-        // Tunnel
+      // Move in current direction
+      if (canMoveDir(state.maze, state.pacPos, state.pacDir, false)) {
+        const col = Math.round(state.pacPos.x);
+        const row = Math.round(state.pacPos.y);
+
+        if (state.pacDir.x !== 0) {
+          const nx = state.pacPos.x + state.pacDir.x * pacStep;
+          const nCol = Math.round(nx);
+          if (nCol !== col && !pacPassable(state.maze, nCol, row)) {
+            state.pacPos.x = col; // snap to tile center, stop moving
+          } else {
+            state.pacPos.x = nx;
+          }
+        } else if (state.pacDir.y !== 0) {
+          const ny = state.pacPos.y + state.pacDir.y * pacStep;
+          const nRow = Math.round(ny);
+          if (nRow !== row && !pacPassable(state.maze, col, nRow)) {
+            state.pacPos.y = row;
+          } else {
+            state.pacPos.y = ny;
+          }
+        }
+
+        // Tunnel wrap
         if (state.pacPos.x < -0.5) state.pacPos.x = COLS - 0.5;
         if (state.pacPos.x > COLS - 0.5) state.pacPos.x = -0.5;
-      } else if (isTileAligned(state.pacPos)) {
-        state.pacPos = snapPos(state.pacPos);
       }
 
-      // ── Pacman mouth ──
+      // ── Pacman mouth animation ──
       if (state.pacDir.x !== 0 || state.pacDir.y !== 0) {
-        const speed = 4 * dt;
+        const mspeed = 4 * dt;
         if (state.pacMouthOpen) {
-          state.pacMouthAngle = Math.max(0.02, state.pacMouthAngle - speed);
+          state.pacMouthAngle = Math.max(0.02, state.pacMouthAngle - mspeed);
           if (state.pacMouthAngle <= 0.02) state.pacMouthOpen = false;
         } else {
-          state.pacMouthAngle = Math.min(0.4, state.pacMouthAngle + speed);
+          state.pacMouthAngle = Math.min(0.4, state.pacMouthAngle + mspeed);
           if (state.pacMouthAngle >= 0.4) state.pacMouthOpen = true;
         }
       } else {
@@ -660,7 +811,11 @@ export default function PacmanGame({
           state.powerActive = true;
           state.powerTimer = POWER_DURATION;
           for (const g of state.ghosts) {
-            if (g.mode !== "eaten") {
+            if (
+              g.mode !== "eaten" &&
+              g.mode !== "house" &&
+              g.mode !== "exiting"
+            ) {
               g.mode = "frightened";
               g.frightenTimer = POWER_DURATION;
             }
@@ -689,77 +844,31 @@ export default function PacmanGame({
 
       // ── Ghost updates ──
       for (const ghost of state.ghosts) {
-        // Release timer countdown
-        if (ghost.releaseTimer > 0) {
-          ghost.releaseTimer -= dt;
-          // While waiting, bounce up/down inside house
-          const gcol = Math.round(ghost.pos.x);
-          const grow = Math.round(ghost.pos.y);
-          const step = GHOST_SPEED * 0.5 * dt;
-          const nd = ghost.dir.y !== 0 ? ghost.dir : DIRS.up;
-          const ngrow = grow + nd.y;
-          if (ghostPassable(state.maze, gcol, ngrow)) {
-            ghost.pos = { x: ghost.pos.x, y: ghost.pos.y + nd.y * step };
-            ghost.dir = nd;
-          } else {
-            ghost.dir = { x: -ghost.dir.x, y: -ghost.dir.y };
-          }
-          continue;
-        }
-
-        // Frightened timer
-        if (ghost.mode === "frightened") {
-          ghost.frightenTimer -= dt;
-          if (ghost.frightenTimer <= 0) ghost.mode = "chase";
-        }
-
-        const ghostStep =
-          (ghost.mode === "frightened"
-            ? GHOST_SPEED * 0.55
-            : ghost.mode === "eaten"
-              ? GHOST_SPEED * 2
-              : GHOST_SPEED) * dt;
-
-        // At tile boundary: pick new direction
-        if (isTileAligned(ghost.pos)) {
-          ghost.pos = snapPos(ghost.pos);
-          ghost.dir = pickGhostDir(ghost, state);
-        }
-
-        // Move
-        const ngx = ghost.pos.x + ghost.dir.x * ghostStep;
-        const ngy = ghost.pos.y + ghost.dir.y * ghostStep;
-        const ngCol = Math.round(ngx);
-        const ngRow = Math.round(ngy);
-
-        if (ghostPassable(state.maze, ngCol, ngRow)) {
-          ghost.pos = { x: ngx, y: ngy };
-          // Tunnel
-          if (ghost.pos.x < -0.5) ghost.pos.x = COLS - 0.5;
-          if (ghost.pos.x > COLS - 0.5) ghost.pos.x = -0.5;
-        } else {
-          // Snap and reverse
-          ghost.pos = snapPos(ghost.pos);
-          ghost.dir = { x: -ghost.dir.x, y: -ghost.dir.y };
-        }
+        updateGhost(ghost, state, dt);
       }
 
-      // ── Collision ──
+      // ── Collision detection ──
       for (const ghost of state.ghosts) {
-        if (ghost.mode === "eaten") continue;
+        if (
+          ghost.mode === "eaten" ||
+          ghost.mode === "house" ||
+          ghost.mode === "exiting"
+        )
+          continue;
         const dx = Math.abs(ghost.pos.x - state.pacPos.x);
         const dy = Math.abs(ghost.pos.y - state.pacPos.y);
-        if (dx < 0.7 && dy < 0.7) {
+        if (dx < 0.65 && dy < 0.65) {
           if (ghost.mode === "frightened") {
             ghost.mode = "eaten";
             state.score += 200;
             onScoreUpdateRef.current(state.score);
+            // Return ghost to house after delay
             const g = ghost;
             setTimeout(() => {
               g.pos = { x: 9, y: 10 };
-              g.mode = "chase";
+              g.mode = "house";
               g.dir = DIRS.up;
-              g.releaseTimer = 0;
+              g.releaseTimer = 3;
             }, 3000);
           } else {
             state.gameStatus = "dying";
@@ -789,7 +898,7 @@ export default function PacmanGame({
 
     const loop = (timestamp: number) => {
       const dt = lastTimeRef.current
-        ? Math.min((timestamp - lastTimeRef.current) / 1000, 0.05) // seconds, capped at 50ms
+        ? Math.min((timestamp - lastTimeRef.current) / 1000, 0.05)
         : 0.016;
       lastTimeRef.current = timestamp;
       frameRef.current++;

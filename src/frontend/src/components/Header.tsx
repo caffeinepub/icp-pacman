@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Page } from "../App";
 import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
@@ -7,6 +7,8 @@ import { useInternetIdentity } from "../hooks/useInternetIdentity";
 interface HeaderProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
+  isAdmin: boolean;
+  onRegister: () => void;
 }
 
 function formatCountdown(targetNs: bigint): string {
@@ -26,7 +28,12 @@ function truncatePrincipal(principal: string): string {
   return `${principal.slice(0, 5)}...${principal.slice(-4)}`;
 }
 
-export default function Header({ currentPage, onNavigate }: HeaderProps) {
+export default function Header({
+  currentPage,
+  onNavigate,
+  isAdmin,
+  onRegister,
+}: HeaderProps) {
   const { actor } = useActor();
   const { identity, login, clear, isLoggingIn, isInitializing } =
     useInternetIdentity();
@@ -35,6 +42,9 @@ export default function Header({ currentPage, onNavigate }: HeaderProps) {
   const [displayText, setDisplayText] = useState<string>("");
   const [isLive, setIsLive] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Track whether we've already registered in this session
+  const hasRegistered = useRef(false);
 
   const fetchCountdown = useCallback(async () => {
     if (!actor) return;
@@ -77,6 +87,18 @@ export default function Header({ currentPage, onNavigate }: HeaderProps) {
 
   const principal = identity?.getPrincipal().toString();
   const isLoggedIn = !!identity && !identity.getPrincipal().isAnonymous();
+
+  // Once logged in and actor is ready, register the caller once per session
+  useEffect(() => {
+    if (isLoggedIn && actor && !hasRegistered.current) {
+      hasRegistered.current = true;
+      onRegister();
+    }
+    // Reset flag on logout
+    if (!isLoggedIn) {
+      hasRegistered.current = false;
+    }
+  }, [isLoggedIn, actor, onRegister]);
 
   const navLinks: Array<{ page: Page; label: string; ocid: string }> = [
     { page: "game", label: "GAME", ocid: "header.game_link" },
@@ -151,9 +173,20 @@ export default function Header({ currentPage, onNavigate }: HeaderProps) {
           {/* Auth button */}
           {isLoggedIn ? (
             <div className="flex items-center gap-2">
-              <span className="hidden sm:block font-arcade text-xs text-pac-cyan">
-                {truncatePrincipal(principal!)}
-              </span>
+              <div className="hidden sm:flex items-center gap-1.5">
+                <span className="font-arcade text-xs text-pac-cyan">
+                  {truncatePrincipal(principal!)}
+                </span>
+                {isAdmin && (
+                  <span
+                    data-ocid="header.admin_badge"
+                    className="font-arcade text-[10px] px-1.5 py-0.5 rounded border border-pac-gold/70 text-pac-gold bg-pac-gold/10 tracking-widest"
+                    style={{ textShadow: "0 0 6px oklch(0.82 0.16 84 / 0.8)" }}
+                  >
+                    ADMIN
+                  </span>
+                )}
+              </div>
               <Button
                 data-ocid="header.logout_button"
                 onClick={clear}

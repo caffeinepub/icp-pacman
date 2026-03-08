@@ -121,6 +121,7 @@ export interface backendInterface {
     getTotalPlays(): Promise<bigint>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     isCallerAdmin(): Promise<boolean>;
+    registerOrGetRole(): Promise<UserRole>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
     setCountdown(target: bigint): Promise<void>;
     setPayoutWallet(wallet: Principal): Promise<void>;
@@ -322,6 +323,20 @@ export class Backend implements backendInterface {
         } else {
             const result = await this.actor.isCallerAdmin();
             return result;
+        }
+    }
+    async registerOrGetRole(): Promise<UserRole> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.registerOrGetRole();
+                return from_candid_UserRole_n4(this._uploadFile, this._downloadFile, result);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.registerOrGetRole();
+            return from_candid_UserRole_n4(this._uploadFile, this._downloadFile, result);
         }
     }
     async saveCallerUserProfile(arg0: UserProfile): Promise<void> {

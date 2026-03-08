@@ -1,44 +1,31 @@
 # ICP Pacman
 
 ## Current State
-Empty project shell. No backend logic, no frontend components, no game code.
+- Authorization uses `_initializeAccessControlWithSecret` with a token from env var — callers must know the secret to become admin.
+- `startGame` always increments jackpotBalance (simulated payment) for all callers.
+- Frontend always shows the payment confirmation dialog before starting a game.
+- Header shows the principal but no admin indicator.
 
 ## Requested Changes (Diff)
 
 ### Add
-- Full Pacman game playable in browser (canvas-based, keyboard controls, ghosts, pellets, power pellets, score)
-- Internet Identity authentication (login/logout)
-- ICP payment: 25 cents per play, deducted on game start
-- Revenue split per play: 5% to cycles wallet, 25% to jackpot pool, 70% to payout wallet
-- Live leaderboard page showing top scores with player principal IDs
-- Admin panel (admin-only, gated by principal ID) with:
-  - Manual jackpot payout trigger
-  - Countdown timer for automatic jackpot disbursement
-  - View current jackpot balance
-- Persistent payout countdown timer visible in top-right corner of all pages
+- Backend: a `registerCaller` function (or inline logic in `startGame`) that auto-assigns #admin to the very first non-anonymous principal that calls it, and #user to everyone after.
+- Backend: `isAdminFreePlay` check in `startGame` — if caller is admin, skip the jackpotBalance increment (free play), still return `{ ok = true }`.
+- Frontend: query `isCallerAdmin()` after login and cache result in state.
+- Frontend: when admin clicks Play, skip the payment dialog and go straight to `startGame` / playing phase.
+- Frontend: show a "FREE PLAY" badge on the Play button and game area when caller is admin.
 
 ### Modify
-- Nothing (new project)
+- Backend `startGame`: add auto-registration of first-time callers (first = admin, rest = user), and bypass payment for admin.
+- `access-control.mo` `initialize`: change so it does NOT require an adminToken match — the very first caller automatically becomes admin regardless.
+- Frontend `GamePage`: detect `isAdmin` prop/state; if true, skip `setPhase("confirming")` and call `handleConfirmStart` directly.
+- Frontend `Header`: optionally show a small "ADMIN" badge next to principal when caller is admin.
 
 ### Remove
-- Nothing
+- Dependency on `_initializeAccessControlWithSecret` for first-time admin assignment (replaced by auto-first-login logic).
 
 ## Implementation Plan
-1. Backend (Motoko):
-   - Player authentication via Internet Identity (principal-based)
-   - Store leaderboard entries (principal, score, timestamp)
-   - Track jackpot pool balance (ICP)
-   - Track payment splits: cycles (5%), jackpot (25%), payout wallet (70%)
-   - Record game sessions and payment status
-   - Admin functions: set admin principal, trigger jackpot payout, set countdown timer
-   - Query functions: getLeaderboard, getJackpot, getCountdown, isAdmin
-   - Update functions: startGame (requires payment), submitScore, triggerPayout, setCountdown
-
-2. Frontend:
-   - Login/logout via Internet Identity
-   - Home page with Pacman game canvas (keyboard + touch controls)
-   - Game start requires login + payment confirmation
-   - Game over screen with score submission
-   - Leaderboard page (live, auto-refreshing)
-   - Admin page (principal-gated): jackpot display, payout trigger, countdown setter
-   - Global header with: logo, nav links, login/logout, payout timer (top-right)
+1. Update `access-control.mo`: remove token-check requirement so first non-anonymous caller always becomes admin.
+2. Update `main.mo` `startGame`: call `AccessControl.initialize` to auto-register caller, then check `isAdmin` to decide whether to increment jackpot.
+3. Update `GamePage.tsx`: fetch `isCallerAdmin` after actor is ready + logged in; store in state. If admin, `handlePlayClick` bypasses confirmation dialog and calls `handleConfirmStart` directly. Show "FREE PLAY" on the button.
+4. Update `Header.tsx`: show "ADMIN" badge next to principal when `isAdmin` is true.

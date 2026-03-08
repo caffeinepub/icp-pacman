@@ -1,20 +1,39 @@
 import { Toaster } from "@/components/ui/sonner";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { UserRole } from "./backend";
 import AdminPage from "./components/AdminPage";
 import GamePage from "./components/GamePage";
 import Header from "./components/Header";
 import LeaderboardPage from "./components/LeaderboardPage";
+import { useActor } from "./hooks/useActor";
 
 export type Page = "game" | "leaderboard" | "admin";
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>("game");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const { actor } = useActor();
+
+  const registerAndCheckAdmin = useCallback(async () => {
+    if (!actor) return;
+    try {
+      const role = await actor.registerOrGetRole();
+      setIsAdmin(role === UserRole.admin);
+    } catch {
+      // ignore — treat as non-admin
+    }
+  }, [actor]);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <Header currentPage={currentPage} onNavigate={setCurrentPage} />
+      <Header
+        currentPage={currentPage}
+        onNavigate={setCurrentPage}
+        isAdmin={isAdmin}
+        onRegister={registerAndCheckAdmin}
+      />
       <main className="flex-1">
-        {currentPage === "game" && <GamePage />}
+        {currentPage === "game" && <GamePage isAdmin={isAdmin} />}
         {currentPage === "leaderboard" && <LeaderboardPage />}
         {currentPage === "admin" && <AdminPage />}
       </main>

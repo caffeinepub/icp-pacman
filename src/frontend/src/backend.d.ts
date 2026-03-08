@@ -38,6 +38,7 @@ export interface backendInterface {
     getTotalPlays(): Promise<bigint>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     isCallerAdmin(): Promise<boolean>;
+    registerOrGetRole(): Promise<UserRole>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
     setCountdown(target: bigint): Promise<void>;
     setPayoutWallet(wallet: Principal): Promise<void>;

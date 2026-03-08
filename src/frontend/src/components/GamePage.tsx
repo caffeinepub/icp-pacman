@@ -16,7 +16,11 @@ import PacmanGame from "./PacmanGame";
 
 type GamePhase = "pregame" | "confirming" | "playing" | "gameover";
 
-export default function GamePage() {
+interface GamePageProps {
+  isAdmin: boolean;
+}
+
+export default function GamePage({ isAdmin }: GamePageProps) {
   const { actor, isFetching } = useActor();
   const { identity, login, isLoggingIn } = useInternetIdentity();
   const [phase, setPhase] = useState<GamePhase>("pregame");
@@ -46,6 +50,11 @@ export default function GamePage() {
   const handlePlayClick = () => {
     if (!isLoggedIn) {
       login();
+      return;
+    }
+    if (isAdmin) {
+      // Admin bypasses payment dialog
+      handleConfirmStart();
       return;
     }
     setPhase("confirming");
@@ -171,14 +180,25 @@ export default function GamePage() {
         {/* Play button */}
         <div className="text-center space-y-4">
           {isLoggedIn ? (
-            <Button
-              data-ocid="game.play_button"
-              onClick={handlePlayClick}
-              size="lg"
-              className="font-arcade text-lg px-12 py-6 bg-pac-yellow text-pac-dark hover:bg-pac-yellow/90 font-black glow-yellow transition-all hover:scale-105 rounded-full"
-            >
-              ▶ PLAY NOW — 0.25 ICP
-            </Button>
+            <div className="space-y-2">
+              <Button
+                data-ocid="game.play_button"
+                onClick={handlePlayClick}
+                size="lg"
+                className={
+                  isAdmin
+                    ? "font-arcade text-lg px-12 py-6 font-black transition-all hover:scale-105 rounded-full bg-pac-cyan text-pac-dark hover:bg-pac-cyan/90 shadow-[0_0_20px_oklch(0.78_0.19_200/0.5)]"
+                    : "font-arcade text-lg px-12 py-6 bg-pac-yellow text-pac-dark hover:bg-pac-yellow/90 font-black glow-yellow transition-all hover:scale-105 rounded-full"
+                }
+              >
+                {isAdmin ? "▶ FREE PLAY (ADMIN)" : "▶ PLAY NOW — 0.25 ICP"}
+              </Button>
+              {isAdmin && (
+                <p className="font-arcade text-xs text-pac-cyan/70 tracking-wide">
+                  Admin account — plays are free for testing
+                </p>
+              )}
+            </div>
           ) : (
             <div className="space-y-3">
               <Button
@@ -196,15 +216,17 @@ export default function GamePage() {
             </div>
           )}
 
-          {/* Cost breakdown */}
-          <div className="font-arcade text-xs text-muted-foreground space-y-1">
-            <p>0.25 ICP per play</p>
-            <p className="flex items-center justify-center gap-3">
-              <span className="text-pac-blue">5% → cycles</span>
-              <span className="text-pac-gold">25% → jackpot</span>
-              <span className="text-pac-cyan">70% → payout</span>
-            </p>
-          </div>
+          {/* Cost breakdown — hidden for admin */}
+          {!isAdmin && (
+            <div className="font-arcade text-xs text-muted-foreground space-y-1">
+              <p>0.25 ICP per play</p>
+              <p className="flex items-center justify-center gap-3">
+                <span className="text-pac-blue">5% → cycles</span>
+                <span className="text-pac-gold">25% → jackpot</span>
+                <span className="text-pac-cyan">70% → payout</span>
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );

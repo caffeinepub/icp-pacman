@@ -41,6 +41,7 @@ export interface _SERVICE {
   'getTotalPlays' : ActorMethod<[], bigint>,
   'getUserProfile' : ActorMethod<[Principal], [] | [UserProfile]>,
   'isCallerAdmin' : ActorMethod<[], boolean>,
+  'registerOrGetRole' : ActorMethod<[], UserRole>,
   'saveCallerUserProfile' : ActorMethod<[UserProfile], undefined>,
   'setCountdown' : ActorMethod<[bigint], undefined>,
   'setPayoutWallet' : ActorMethod<[Principal], undefined>,
